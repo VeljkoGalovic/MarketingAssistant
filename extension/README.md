@@ -9,6 +9,12 @@ session; no cloud scraping, no cookie handoff, no datacenter IP, no writes — e
 
 **Firefox (temporary, dev-mode only):** `about:debugging#/runtime/this-firefox` → **Load Temporary Add-on…** → select `extension/manifest.json`. No separate Firefox manifest needed — the single manifest carries both background keys (`service_worker` for Chrome, `scripts` for Firefox; each browser ignores the other's key). Firefox temporary add-ons are removed on browser restart — re-load after restarting Firefox; for a persistent install use Chrome.
 
+## Setup (once, from the popup)
+
+1. Open the popup → set **Scout endpoint** (e.g. `http://192.168.0.32:8787` — LAN or Tailscale IP of the box) + **ingest token** (`SCOUT_INGEST_TOKEN` in `/opt/lodgetrack-scout/.env` on the box).
+2. Status line should read "✅ Scout reachable — batches will flow."
+3. Drive normal usage: browse the LinkedIn feed / saved searches / group pages with the extension active. Matches batch locally (IndexedDB, deduped) and flush to `/ingest` every ≤1 minute. The popup's pause button stops capture for the current site (state persists per platform).
+
 ## Adapters (per-platform files)
 
 | File | Platform | Notes |
