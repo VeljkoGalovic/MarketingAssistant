@@ -3,14 +3,11 @@
 Browser-local, read-only discovery harness (PLAN §7). Runs under your own logged-in
 session; no cloud scraping, no cookie handoff, no datacenter IP, no writes — ever.
 
-## Install (dev)
+## Install
 
-1. `chrome://extensions` → Developer mode → **Load unpacked** → this folder.
-2. Open the popup → set **Scout endpoint** (e.g. `http://127.0.0.1:8787` or the box's
-   Tailscale IP) + **ingest token** (from the scout `.env`).
-3. Drive normal usage: browse the LinkedIn feed / saved searches / group pages with
-   the extension active. Matches batch locally (IndexedDB, deduped) and flush to
-   `/ingest` every ≤1 minute.
+**Chrome/Chromium/Brave (persistent):** `chrome://extensions` → Developer mode → **Load unpacked** → this folder. It stays installed until removed.
+
+**Firefox (temporary, dev-mode only):** `about:debugging#/runtime/this-firefox` → **Load Temporary Add-on…** → select `extension/manifest.json`. No separate Firefox manifest needed — the single manifest carries both background keys (`service_worker` for Chrome, `scripts` for Firefox; each browser ignores the other's key). Firefox temporary add-ons are removed on browser restart — re-load after restarting Firefox; for a persistent install use Chrome.
 
 ## Adapters (per-platform files)
 
