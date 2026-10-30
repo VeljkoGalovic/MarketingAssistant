@@ -7,7 +7,7 @@
  *   • quiet hours: cards held; morning recap 07:00; daily digest 09:00
  *   • only the configured chat id is ever served; long-poll Bot API
  */
-import { config, isDryMode } from "./config.ts";
+import { config, isDryMode, canPostReddit } from "./config.ts";
 import {
   addEvent,
   banSubreddit,
@@ -167,21 +167,23 @@ async function sendDraftMessage(candidateId: number): Promise<void> {
     await sendText(`⚠️ Cannot approve: ${prepared.reason ?? "unknown"}`);
     return;
   }
-  const channel = isRedditSource(c.source) ? "reddit" : channelOfSource(c.source);
-  const manualNote = isRedditSource(c.source)
+  const isReddit = isRedditSource(c.source);
+  const manualNote = !isReddit
+    ? "\n<i>Posting is manual: copy the draft into the app.</i>"
+    : canPostReddit
     ? ""
-    : "\n<i>Posting is manual: copy the draft into the app.</i>";
+    : "\n<i><b>Reddit Plan B (no API app):</b> copy this draft and post it as your own comment in the thread.</i>";
   const messageId = await sendMessage({
     chat_id: chatTarget(),
     text:
       draftText(prepared.draft) +
-      (channel && channel !== "reddit" ? manualNote : ""),
+      manualNote,
     parse_mode: "HTML",
     disable_web_page_preview: true,
     reply_markup: {
       inline_keyboard: [
         [
-          ...(isRedditSource(c.source)
+          ...(isReddit && canPostReddit
             ? [{ text: "📲 Post to Reddit", callback_data: `post:${prepared.draft.id}` }]
             : []),
           { text: "🔁 Regenerate", callback_data: `regen:${prepared.draft.id}` },

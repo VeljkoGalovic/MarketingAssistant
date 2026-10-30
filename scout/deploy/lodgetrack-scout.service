@@ -7,7 +7,7 @@ Wants=network-online.target
 Type=simple
 # Runs from the repo clone deployed on the box; .env is root-owned 0600.
 WorkingDirectory=/opt/lodgetrack-scout/scout
-ExecStart=/usr/bin/env npx tsx src/index.ts
+ExecStart=/usr/local/bin/node-22 --experimental-strip-types src/index.ts
 EnvironmentFile=/opt/lodgetrack-scout/.env
 Environment=SCOUT_DATA_DIR=/opt/lodgetrack-scout/data
 Environment=SCOUT_KB_DIR=/opt/lodgetrack-scout/scout/kb

@@ -54,6 +54,7 @@
 | 9 | X underdesigned | Resolved above in §2 (documented deliberate deprioritization). |
 | 10 | Kill switch posting-only | **Full kill switch:** Telegram `/stop` stops pollers, pausing `/ingest`, drafts, posting, digests. `/start` resumes. `SCOUT_DISABLED=1` env remains the boot-level master. State persists in DB (survives restarts). |
 | 11 | Forward-link flow underspecified | Spec'd in §7.1 — the highest-frequency interaction, designed properly. |
+| 12 | Reddit developer-app approval wall (2026-10-31) | **Fork B selected:** no OAuth script app for now. Reddit publishing moves to **assisted-manual paste** (same as LinkedIn/X/FB); polling runs on **RSS** (Reddit's documented feeds) + public JSON — no API keys, no approval, no policy surface. Automated posting auto-awakens only if an honestly-described free-tier app is ever approved (keep Fork A as an option). |
 
 **User corrections applied:** minimal-input mode = Telegram interaction is fine; user joins FB groups manually; YouTube dropped; GDPR treated as non-factor (private system) — one hygiene line kept in §11 (retention pruning) purely as DB hygiene, not compliance.
 

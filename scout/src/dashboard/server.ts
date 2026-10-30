@@ -148,7 +148,11 @@ function draftsPage(rows: Array<Record<string, unknown>>): string {
       <td class="muted">${new Date(Number(d.expires_at)).toISOString().slice(5, 16).replace("T", " ")}</td>
       <td>
         <form class="inline" method="post" action="/draft/regen"><input type="hidden" name="id" value="${d.id}"><input type="hidden" name="src" value="drafts"><button>🔁 Regen</button></form>
-        ${d.channel === "reddit" && (d.status === "drafted" || d.status === "edited" || d.status === "approved") ? `<form class="inline" method="post" action="/draft/post"><input type="hidden" name="id" value="${d.id}"><input type="hidden" name="src" value="drafts"><button class="primary">📲 Post</button></form>` : ""}
+        ${d.channel === "reddit" && (d.status === "drafted" || d.status === "edited" || d.status === "approved") ?
+          (canPostReddit
+            ? `<form class="inline" method="post" action="/draft/post"><input type="hidden" name="id" value="${d.id}"><input type="hidden" name="src" value="drafts"><button class="primary">📲 Post</button></form>`
+            : `<span class="tag">📋 copy → paste as your comment (Plan B)</span>`)
+          : ""}
         ${d.status !== "sent" && d.status !== "rejected" ? `<form class="inline" method="post" action="/draft/discard"><input type="hidden" name="id" value="${d.id}"><input type="hidden" name="src" value="drafts"><button>✖️</button></form>` : ""}
       </td></tr>
       <tr><td colspan="7">
@@ -204,7 +208,7 @@ function healthPage(msg: string): string {
   <div class="muted" style="margin-top:8px">red = 3 consecutive zero-row sessions → do the 1-minute manual login check</div></div>
   <div class="card"><h3 style="margin:0 0 10px">Guards</h3>
   <ul>
-    <li>Reddit posting: ${canPostReddit ? (posterPaused() ? "⏸ PAUSED (removals trigger)" : "▶ armed") : "dormant (no credentials)"} · removals 7d: ${removals7d}</li>
+    <li>Reddit posting: ${canPostReddit ? (posterPaused() ? "⏸ PAUSED (removals trigger)" : "▶ armed") : "Plan B — assisted-manual paste (no Reddit developer app; decision 2026-10-31)"} · removals 7d: ${removals7d}</li>
     <li>Kill switch: ${isKillOn() ? "🔴 ON" : "🟢 off"}</li>
     <li>Telegram: ${isDryMode ? "❌ not configured (dry mode)" : "✅ connected"}</li>
     <li>LLM: ${config.llm.google.key ? "Google AI Studio" : config.llm.groq.key ? "Groq" : config.llm.cloudflare.accountId ? "Cloudflare" : "KB fallback (deterministic)"}</li>

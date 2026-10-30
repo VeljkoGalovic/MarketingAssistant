@@ -1,5 +1,6 @@
 import { config } from "./config.ts";
 import type { NewCandidate } from "./db.ts";
+import { addEvent } from "./db.ts";
 import { scoreText } from "./keywords.ts";
 
 const USER_AGENT = `web:LodgeTrackScout:v0.1 (by /u/${config.reddit.username})`;
@@ -128,12 +129,86 @@ export async function fetchThreadByUrl(url: string): Promise<{
 
 
 /** Poll one subreddit and return scored, non-duplicate candidates. */
+// ---- Reddit discovery without API access: RSS (Reddit's documented feeds) + public JSON ----
+// Fork B decision 2026-10-31: no developer app for now; poller prefers RSS,
+// falls back to public JSON. OAuth path stays intact for later (if ever approved).
+
+function unescapeXml(s: string): string {
+  return s
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&");
+}
+
+function stripTags(html: string): string {
+  return html
+    .replace(/<[^>]+>/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+interface FeedPost extends FetchedPost {}
+
+async function fetchSubredditRss(sub: string, searchQuery: string): Promise<FeedPost[]> {
+  const path = searchQuery
+    ? `/r/${sub}/search.rss?q=${encodeURIComponent(searchQuery)}&restrict_sr=on&sort=new&t=day&limit=50`
+    : `/r/${sub}/new/.rss?limit=50`;
+  const res = await fetch(`https://www.reddit.com${path}`, {
+    headers: { "User-Agent": USER_AGENT },
+  });
+  if (res.status === 429) {
+    const retry = Number(res.headers.get("retry-after") ?? 60);
+    throw Object.assign(new Error(`reddit rss 429 for r/${sub}`), { retryAfter: retry * 1000 });
+  }
+  if (!res.ok) throw new Error(`reddit rss HTTP ${res.status} for r/${sub}`);
+  const xml = await res.text();
+
+  const out: FeedPost[] = [];
+  const entryRe = /<entry>([\s\S]*?)<\/entry>/g;
+  let m: RegExpExecArray | null;
+  while ((m = entryRe.exec(xml))) {
+    const e = m[1];
+    const id = e.match(/<id>([^<]+)<\/id>/)?.[1];
+    const link = e.match(/<link[^>]*href="([^"]+)"/)?.[1];
+    const title = unescapeXml(e.match(/<title[^>]*>([^<]+)<\/title>/)?.[1] ?? "");
+    const contentHtml = e.match(/<content[^>]*>([\s\S]*?)<\/content>/)?.[1] ?? "";
+    if (!id || !link || !title) continue;
+    const author =
+      unescapeXml(e.match(/<name>([^<]+)<\/name>/)?.[1] ?? "").replace(/^u\//, "") || "[unknown]";
+    out.push({
+      externalId: id.startsWith("t3_") ? id : `t3_${id}`,
+      url: link,
+      title,
+      body: stripTags(unescapeXml(contentHtml)).slice(0, 2000),
+      author,
+      subreddit: sub,
+    });
+  }
+  return out;
+}
+
+/** Poll one subreddit → scored candidates. Source: OAuth if creds, else RSS → public JSON. */
 export async function pollSubreddit(
   sub: string,
   banned: Set<string>
 ): Promise<ScoredCandidate[]> {
   if (banned.has(sub.toLowerCase())) return [];
-  const posts = await fetchSubredditNew(sub, config.reddit.searchQuery);
+  const hasOauth = !!(config.reddit.clientId && config.reddit.clientSecret);
+  const query = config.reddit.searchQuery;
+  let posts: FetchedPost[];
+  if (hasOauth) {
+    posts = await fetchSubredditNew(sub, query);
+  } else {
+    try {
+      posts = await fetchSubredditRss(sub, query);
+    } catch (e) {
+      addEvent("error", `rss r/${sub}: ${String(e)} — falling back to public JSON`);
+      posts = await fetchSubredditNew(sub, query);
+    }
+  }
   const out: ScoredCandidate[] = [];
   for (const p of posts) {
     const { score, matched } = scoreText(p.title, p.body);
