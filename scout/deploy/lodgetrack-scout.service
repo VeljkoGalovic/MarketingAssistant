@@ -1,0 +1,24 @@
+[Unit]
+Description=LodgeTrack Scout (growth marketing daemon)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Runs from the repo clone deployed on the box; .env is root-owned 0600.
+WorkingDirectory=/opt/lodgetrack-scout/scout
+ExecStart=/usr/bin/env npx tsx src/index.ts
+EnvironmentFile=/opt/lodgetrack-scout/.env
+Environment=SCOUT_DATA_DIR=/opt/lodgetrack-scout/data
+Environment=SCOUT_KB_DIR=/opt/lodgetrack-scout/scout/kb
+Environment=NODE_ENV=production
+Restart=always
+RestartSec=30
+# Hardening: outbound-only (the /ingest listener binds per SCOUT_INGEST_BIND)
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/opt/lodgetrack-scout
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

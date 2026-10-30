@@ -1,0 +1,35 @@
+{
+  "manifest_version": 3,
+  "name": "LodgeTrack Growth",
+  "version": "0.1.0",
+  "description": "Read-only discovery harness: extracts host-community posts from your own logged-in session and forwards matches to your scout. No writes, no likes, no DMs — ever.",
+  "permissions": ["storage", "alarms"],
+  "host_permissions": [
+    "http://localhost:8787/*",
+    "http://127.0.0.1:8787/*"
+  ],
+  "background": { "service_worker": "background.js", "type": "module" },
+  "action": { "default_popup": "popup.html" },
+  "content_scripts": [
+    {
+      "matches": ["*://*.linkedin.com/*"],
+      "js": ["lib/filter.js", "lib/harness.js", "content/linkedin.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["*://*.x.com/*"],
+      "js": ["lib/filter.js", "lib/harness.js", "content/x.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["*://*.facebook.com/*"],
+      "js": ["lib/filter.js", "lib/harness.js", "content/facebook.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["*://*.reddit.com/*"],
+      "js": ["lib/filter.js", "lib/harness.js", "content/reddit.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}
