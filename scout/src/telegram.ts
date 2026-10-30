@@ -38,7 +38,7 @@ import {
   canPostToSub,
   posterPaused,
 } from "./poster.ts";
-import { generateDraft } from "./drafts/provider.ts";
+import { generateDraft, lintDraft } from "./drafts/provider.ts";
 import { isKillOn } from "./health.ts";
 import { isQuietHour } from "./time.ts";
 
@@ -94,9 +94,14 @@ export function candidateCardText(c: Candidate): string {
 
 function draftText(d: { id: number; channel: string; provider: string | null; body: string; expires_at: number }): string {
   const exp = new Date(d.expires_at).toISOString().slice(0, 16).replace("T", " ") + " UTC";
+  const lint = lintDraft(d.body);
+  const lintLine = lint.length
+    ? `⚠️ <b>tone-lint:</b> ${escapeHtml(lint.join("; "))}\n`
+    : "";
   return [
     `✍️ <b>Draft #${d.id}</b> · ${d.channel} · via ${d.provider ?? "?"} · expires ${exp}`,
     "",
+    lintLine,
     `<pre>${escapeHtml(d.body)}</pre>`,
     "",
     "reply <code>/edit &lt;text&gt;</code> to this message to revise.",

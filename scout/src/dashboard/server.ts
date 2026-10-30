@@ -33,6 +33,7 @@ import {
 import { approveAndPrepare, postDraft, regenerateDraft, updateDraftBody, posterPaused, setPosterPaused } from "../poster.ts";
 import { canaryFor, isKillOn, type CanaryStatus } from "../health.ts";
 import { listWatchItems, addWatchItem, removeWatchItem } from "../db.ts";
+import { lintDraft } from "../drafts/provider.ts";
 
 const sessions = new Set<string>();
 const COOKIE = "scout_dash";
@@ -142,7 +143,7 @@ function draftsPage(rows: Array<Record<string, unknown>>): string {
     .map(
       (d) => `<tr><td class="muted">#${d.id}</td>
       <td><span class="tag">${esc(String(d.channel))}</span></td>
-      <td class="draft">${esc(String(d.body))}</td>
+      <td class="draft">${esc(String(d.body))}${lintDraft(String(d.body)).length ? `<div class="warn">⚠️ tone-lint: ${esc(lintDraft(String(d.body)).join("; "))}</div>` : ""}</td>
       <td class="muted">${esc(String(d.provider ?? ""))}</td>
       <td><span class="tag">${esc(String(d.status))}</span></td>
       <td class="muted">${new Date(Number(d.expires_at)).toISOString().slice(5, 16).replace("T", " ")}</td>

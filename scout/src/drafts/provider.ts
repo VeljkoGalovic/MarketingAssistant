@@ -32,6 +32,27 @@ export interface DraftResult {
   provider: string;
 }
 
+/** Deterministic tone-lint — the "humanizer" idea stolen from the tools we evaluated
+ * (2026-10-31): flags AI-writing tells / hype *before* a draft is shown. No model call. */
+const LINT_PATTERNS: Array<{ re: RegExp; why: string }> = [
+  { re: /\bgame[- ]?changer\b/i, why: "hype: game-changer" },
+  { re: /\brevolutionar/i, why: "hype: revolutionary" },
+  { re: /\bdisrupt\w*\b/i, why: "hype: disrupt" },
+  { re: /\bseamless(ly)?\b/i, why: "AI-tell: seamless" },
+  { re: /\beffortless(ly)?\b/i, why: "AI-tell: effortless" },
+  { re: /\bunparallel\w*\b/i, why: "hype: unparalleled" },
+  { re: /\bthe best (tool|platform|software)\b/i, why: "hype: 'the best ___'" },
+  { re: /\bdeliver\w* (value|results)\b/i, why: "corporate-speak" },
+  { re: /!{2,}/, why: "shouting: repeated '!'" },
+  { re: /\b[A-Z]{4,}\b(?! [A-Z]{4,})/, why: "ALL-CAPS word" },
+  { re: /\bI'?m (an|just an) AI\b/i, why: "never admit automation" },
+  { re: /—/, why: "em-dash (classic AI tell)" },
+];
+
+export function lintDraft(text: string): string[] {
+  return LINT_PATTERNS.filter((p) => p.re.test(text)).map((p) => p.why);
+}
+
 function kbToText(entries: KbEntry[]): string {
   return entries.map((e) => `### ${e.title}\n${e.body}`).join("\n\n");
 }
