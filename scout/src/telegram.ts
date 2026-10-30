@@ -44,6 +44,24 @@ import { isQuietHour } from "./time.ts";
 
 const API = () => `https://api.telegram.org/bot${config.telegram.botToken}`;
 
+/** Chat id resolution: DB binding (first-contact auto-bind) beats the env value. */
+function chatTarget(): string {
+  return getSetting("telegram_chat_id") || config.telegram.chatId || "";
+}
+
+/** Auto-bind: the FIRST private-chat message from the founder bonds this chat forever. */
+export async function maybeBindChat(
+  chat: { id: number; type?: string; username?: string } | undefined
+): Promise<boolean> {
+  if (!chat || chat.type !== "private") return false;
+  if (getSetting("telegram_chat_id") || config.telegram.chatId) return false;
+  setSetting("telegram_chat_id", String(chat.id));
+  addEvent("bind", `telegram chat ${chat.id} (@${chat.username ?? "?"}) bound on first contact`);
+  await sendText(
+    `🔗 <b>Bound to this chat.</b> Cards start flowing here (quiet hours ${config.quiet.startHour}:00–${config.quiet.endHour}:00, morning recap after). Use /health anytime.` );
+  return true;
+}
+
 function escapeHtml(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
@@ -89,7 +107,14 @@ function draftText(d: { id: number; channel: string; provider: string | null; bo
 
 async function sendMessage(payload: Record<string, unknown>): Promise<number | null> {
   if (isDryMode) return null;
-  const msg = (await tg<any>("sendMessage", payload)) as { message_id: number };
+  const msg = (await tg<any>("sendMessage", {
+    chat_id: chatTarget(),
+    text: payload.text ?? "",
+    parse_mode: payload.parse_mode ?? "HTML",
+    disable_web_page_preview: true,
+    ...(payload.reply_markup ? { reply_markup: payload.reply_markup } : {}),
+  })) as { message_id: number };
+  return msg.message_id;
   return msg.message_id;
 }
 
@@ -108,7 +133,7 @@ export async function notifyCandidateCard(c: Candidate): Promise<void> {
       ? [{ text: "✅ Approve & draft", callback_data: `approve:${c.id}` }]
       : [{ text: "✍️ Draft for me", callback_data: `approve:${c.id}` }];
     const messageId = await sendMessage({
-      chat_id: config.telegram.chatId,
+      chat_id: chatTarget(),
       text: candidateCardText(c),
       parse_mode: "HTML",
       disable_web_page_preview: true,
@@ -147,7 +172,7 @@ async function sendDraftMessage(candidateId: number): Promise<void> {
     ? ""
     : "\n<i>Posting is manual: copy the draft into the app.</i>";
   const messageId = await sendMessage({
-    chat_id: config.telegram.chatId,
+    chat_id: chatTarget(),
     text:
       draftText(prepared.draft) +
       (channel && channel !== "reddit" ? manualNote : ""),
@@ -183,7 +208,7 @@ export async function sendText(text: string): Promise<void> {
     return;
   }
   await tg("sendMessage", {
-    chat_id: config.telegram.chatId,
+    chat_id: chatTarget(),
     text,
     parse_mode: "HTML",
     disable_web_page_preview: true,
@@ -249,9 +274,12 @@ interface TgUpdate {
 
 async function handleUpdate(u: TgUpdate): Promise<void> {
   if (isDryMode) return;
+  // first-contact auto-bind (private chats only) — PLAN §11 binding flow
+  if (u.message) await maybeBindChat(u.message.chat as never);
+  const target = chatTarget();
   const chatId =
     u.message?.chat.id ?? u.callback_query?.message?.chat?.id ?? -1;
-  if (String(chatId) !== String(config.telegram.chatId)) return;
+  if (!target || String(chatId) !== target) return;
 
   if (u.callback_query) {
     await handleCallback(u.callback_query);
@@ -392,7 +420,7 @@ async function handleCallback(cq: TgCallback): Promise<void> {
 async function editTo(messageId: number, text: string): Promise<void> {
   try {
     await tg("editMessageText", {
-      chat_id: config.telegram.chatId,
+      chat_id: chatTarget(),
       message_id: messageId,
       text,
       parse_mode: "HTML",
@@ -464,7 +492,7 @@ async function sendAssistedDraft(title: string, body: string, platform: string):
   });
   const draft = createDraft(null, channel, result.text, result.provider);
   await sendMessage({
-    chat_id: config.telegram.chatId,
+    chat_id: chatTarget(),
     text:
       draftText({ ...draft, channel, provider: result.provider }) +
       "\n<i>Posting is manual: copy into the app.</i>",
