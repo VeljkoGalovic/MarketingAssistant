@@ -93,6 +93,13 @@ export const config = {
     token: str("SCOUT_INGEST_TOKEN"),
     maxPerHour: int("SCOUT_INGEST_MAX_PER_HOUR", 600),
   },
+  dashboard: {
+    port: int("SCOUT_DASHBOARD_PORT", 8788),
+    bind: str("SCOUT_DASHBOARD_BIND", "0.0.0.0"),
+    /** empty → auto-generated, written to data/dashboard-token.txt (0600) */
+    token: str("SCOUT_DASHBOARD_TOKEN"),
+    disabled: bool("SCOUT_DASHBOARD_DISABLED"),
+  },
   poster: {
     removalsPerDays: int("SCOUT_REMOVAL_TRIGGER", 3),
     removalWindowDays: int("SCOUT_REMOVAL_WINDOW_DAYS", 7),

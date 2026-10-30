@@ -7,7 +7,7 @@
  */
 window.__registerAdapter = function registerAdapter({ platform, extractPosts, containerSelector }) {
   const seen = new Set();
-  let paused = localStorage.getItem(`scout:paused:${platform}`) === "1";
+  let paused = false;
 
   function send(row) {
     chrome.runtime.sendMessage({ type: "row", row }, () => void chrome.runtime.lastError);
@@ -58,15 +58,22 @@ window.__registerAdapter = function registerAdapter({ platform, extractPosts, co
   chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     if (msg?.type === "toggle" && msg.platform === platform) {
       paused = !paused;
-      localStorage.setItem(`scout:paused:${platform}`, paused ? "1" : "0");
+      chrome.storage.local.set({ [`paused:${platform}`]: paused });
+      sendResponse({ paused });
+    }
+    if (msg?.type === "getState" && msg.platform === platform) {
       sendResponse({ paused });
     }
     return false;
   });
 
-  if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", start);
-  } else {
-    start();
-  }
+  // pause state persists in chrome.storage (popup-controlled; Insight-Social parity)
+  chrome.storage.local.get([`paused:${platform}`], (items) => {
+    paused = !!items[`paused:${platform}`];
+    if (document.readyState === "loading") {
+      document.addEventListener("DOMContentLoaded", start);
+    } else {
+      start();
+    }
+  });
 };

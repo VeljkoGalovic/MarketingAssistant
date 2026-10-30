@@ -103,17 +103,12 @@ function sourcePlatform(source: string): "reddit" | "linkedin" | "x" | "facebook
   return "manual";
 }
 
-/** Prepare an approved candidate: generate (or reuse) a founder-voice draft. */
+/** Prepare an approved candidate: generate (or reuse) a founder-voice draft.
+ * Drafting must ALWAYS work (dry mode included) — the post-time gate in
+ * postDraft() is what enforces caps/creds/kill-switch. */
 export async function approveAndPrepare(
   c: Candidate
 ): Promise<{ ok: boolean; draft?: Draft; reason?: string }> {
-  if (posterPaused()) return { ok: false, reason: "poster paused (removals trigger)" };
-  const gate = canPostToSub(c.subreddit ?? "");
-  if (!gate.ok && gate.reason !== "cap reached") {
-    // "cap reached" still allows drafting the card; post itself refuses later.
-    if (gate.reason && !gate.reason.startsWith("cap")) return { ok: false, reason: gate.reason };
-  }
-
   const existing = findExistingDraft(c.id);
   if (existing) return { ok: true, draft: existing };
 

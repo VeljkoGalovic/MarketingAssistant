@@ -11,6 +11,7 @@ import { runPoller } from "./poller.ts";
 import { notifyCandidateCard, runTelegramLoop, sendDigest, sendRecap } from "./telegram.ts";
 import { recordPostedComment, scanForRemovals, accountSuspended } from "./health.ts";
 import { startIngestServer } from "./ingest.ts";
+import { startDashboardServer } from "./dashboard/server.ts";
 import { sweepCities } from "./leadfinder/overpass.ts";
 import { getSetting, setSetting } from "./db.ts";
 import { hourInTimezone } from "./time.ts";
@@ -126,6 +127,7 @@ boot();
 startDailyTicker();
 startMaintenance();
 startIngestServer();
+startDashboardServer();
 startLeadfinder();
 
 // main poll loop (own stack: never awaited)

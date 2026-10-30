@@ -30,6 +30,22 @@ No tags/CI for the scout — it shares nothing with the LodgeTrack release pipel
 - `SCOUT_DISABLED=1` is the boot-level master kill switch; Telegram `/stop` sets the same
   flag at runtime (stored in DB, survives restarts).
 
+## LAN Web Dashboard
+
+The scout serves a browser dashboard (token-gated, server-rendered, zero deps):
+
+- **Default:** `http://<scout-box-ip>:8788` — reachable from any device on the LAN/Tailscale.
+- **Token:** `SCOUT_DASHBOARD_TOKEN`, or auto-generated at first boot into
+  `data/dashboard-token.txt` (mode 0600) — printed to the log once:
+  `journalctl -u lodgetrack-scout | grep dashboard`.
+- **Pages:** Queue (filter by status/source; Draft/Skip/Ban-straight-from-the-table),
+  Drafts (edit in-place, Regenerate, Post — Reddit only; other platforms show the
+  copy-paste draft), Leads (+CSV export, DNC hard-block), Health (stats, extraction
+  canary green/yellow/red, guards, LLM provider in use), Events, Settings (effective
+  caps from .env, watchlist editor), and the kill-switch toggle in the header.
+- **Same-origin policy:** all writes require a dashboard session cookie + same-origin
+  POST. All actions also work — identically — through Telegram.
+
 ## Daily/Weekly operator runbook (from PLAN §7)
 
 - **Morning (done by 08:00):** open Telegram — recap (07:00) + digest (09:00). Review held cards,

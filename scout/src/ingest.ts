@@ -98,6 +98,10 @@ export function startIngestServer(): void {
     });
   });
 
+  server.on("error", (e) => {
+    addEvent("error", `ingest: ${String(e)}`);
+    console.error(`[ingest] server error: ${String(e)}`);
+  });
   server.listen(config.ingest.port, config.ingest.bind, () => {
     addEvent("boot", `ingest listening on ${config.ingest.bind}:${config.ingest.port}`);
   });
@@ -114,6 +118,11 @@ function handleIngestPayload(payload: IngestPayload): number {
     if (!item.url || !item.title) continue;
     const externalId = item.externalId ?? item.id ?? canonical(item.url).slice(0, 250);
     const { matched, score } = scoreText(item.title, item.body ?? "");
+    // defense-in-depth: the extension already pre-filters; re-check threshold here
+    if (score < config.reddit.scoreThreshold) {
+      addEvent("ingest", `dropped row ${externalId} (score ${score} < threshold)`);
+      continue;
+    }
     const candidate: NewCandidate = {
       source: `extension:${platform}`,
       external_id: externalId,
