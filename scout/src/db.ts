@@ -188,6 +188,17 @@ export function candidatesSince(sinceMs: number): Candidate[] {
     .all(sinceMs) as Candidate[];
 }
 
+/** Rows the extension captured since a timestamp (nudge + canary inputs). */
+export function countExtensionRowsSince(sinceMs: number): number {
+  return (
+    db
+      .prepare(
+        "SELECT COUNT(*) AS n FROM candidates WHERE source LIKE 'extension:%' AND created_at >= ?"
+      )
+      .get(sinceMs) as { n: number }
+  ).n;
+}
+
 // ---------------- drafts ----------------
 
 export interface Draft {

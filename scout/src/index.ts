@@ -8,7 +8,7 @@ import { config, isDryMode, canPostReddit } from "./config.ts";
 import { addEvent, expireOldDrafts, pruneOldBodies } from "./db.ts";
 import { isKillOn } from "./health.ts";
 import { runPoller } from "./poller.ts";
-import { notifyCandidateCard, runTelegramLoop, sendDigest, sendRecap } from "./telegram.ts";
+import { notifyCandidateCard, runTelegramLoop, maybeNudgeIfNoCapture, sendDigest, sendRecap } from "./telegram.ts";
 import { recordPostedComment, scanForRemovals, accountSuspended } from "./health.ts";
 import { startIngestServer } from "./ingest.ts";
 import { startDashboardServer } from "./dashboard/server.ts";
@@ -41,6 +41,11 @@ function startDailyTicker(): void {
       if (h === config.quiet.digestHour && lastRunDay("last_digest") !== todayKey()) {
         setSetting("last_digest", todayKey());
         await sendDigest();
+      }
+      const nudgeHour = config.quiet.nudgeHour;
+      if (h === nudgeHour && lastRunDay("last_nudge") !== todayKey()) {
+        setSetting("last_nudge", String(Date.now()));
+        await maybeNudgeIfNoCapture();
       }
     } catch (e) {
       addEvent("error", `ticker: ${String(e)}`);

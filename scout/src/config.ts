@@ -62,6 +62,7 @@ export const config = {
     endHour: int("SCOUT_QUIET_END", 7),
     recapHour: int("SCOUT_RECAP_HOUR", 7),
     digestHour: int("SCOUT_DIGEST_HOUR", 9),
+    nudgeHour: int("SCOUT_NUDGE_HOUR", 20),
   },
   drafts: {
     expireHours: int("SCOUT_DRAFT_EXPIRE_HOURS", 48),

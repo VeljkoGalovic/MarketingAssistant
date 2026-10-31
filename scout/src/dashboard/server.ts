@@ -138,17 +138,29 @@ function queuePage(rows: Candidate[]): string {
 
 function draftsPage(rows: Array<Record<string, unknown>>): string {
   return `<div class="card"><h3 style="margin:0 0 10px">Drafts (${rows.length}) — 48h expiry</h3>
+  <script>
+    document.addEventListener("click", function (e) {
+      var b = e.target.closest(".copy-btn"); if (!b) return;
+      var row = b.closest("tr");
+      var text = row ? row.querySelector(".draft-body") : null;
+      if (!text) return;
+      navigator.clipboard.writeText(text.textContent.trim()).then(function () {
+        b.textContent = "✓ copied"; setTimeout(function () { b.textContent = "📋 Copy"; }, 1400);
+      });
+    });
+  </script>
   <table><tr><th>ID</th><th>Channel</th><th>Body</th><th>Provider</th><th>Status</th><th>Expires</th><th>Actions</th></tr>
   ${rows
     .map(
       (d) => `<tr><td class="muted">#${d.id}</td>
       <td><span class="tag">${esc(String(d.channel))}</span></td>
-      <td class="draft">${esc(String(d.body))}${lintDraft(String(d.body)).length ? `<div class="warn">⚠️ tone-lint: ${esc(lintDraft(String(d.body)).join("; "))}</div>` : ""}</td>
+      <td class="draft"><span class="draft-body">${esc(String(d.body))}</span>${lintDraft(String(d.body)).length ? `<div class="warn">⚠️ tone-lint: ${esc(lintDraft(String(d.body)).join("; "))}</div>` : ""}</td>
       <td class="muted">${esc(String(d.provider ?? ""))}</td>
       <td><span class="tag">${esc(String(d.status))}</span></td>
       <td class="muted">${new Date(Number(d.expires_at)).toISOString().slice(5, 16).replace("T", " ")}</td>
       <td>
         <form class="inline" method="post" action="/draft/regen"><input type="hidden" name="id" value="${d.id}"><input type="hidden" name="src" value="drafts"><button>🔁 Regen</button></form>
+        <button type="button" class="copy-btn" data-draft="${d.id}">📋 Copy</button>
         ${d.channel === "reddit" && (d.status === "drafted" || d.status === "edited" || d.status === "approved") ?
           (canPostReddit
             ? `<form class="inline" method="post" action="/draft/post"><input type="hidden" name="id" value="${d.id}"><input type="hidden" name="src" value="drafts"><button class="primary">📲 Post</button></form>`

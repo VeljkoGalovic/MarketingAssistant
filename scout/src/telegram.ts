@@ -12,6 +12,7 @@ import {
   addEvent,
   banSubreddit,
   candidatesSince,
+  countExtensionRowsSince,
   createDraft,
   getBannedSubreddits,
   getCandidateById,
@@ -149,6 +150,7 @@ export async function notifyCandidateCard(c: Candidate): Promise<void> {
             { text: "⏭ Skip", callback_data: `skip:${c.id}` },
             { text: "🚫 Ban sub", callback_data: `bansub:${c.id}:${c.subreddit ?? ""}` },
           ],
+          [{ text: "🔗 Open the post", url: c.url }],
         ],
       },
     });
@@ -194,6 +196,7 @@ async function sendDraftMessage(candidateId: number): Promise<void> {
           { text: "🔁 Regenerate", callback_data: `regen:${prepared.draft.id}` },
           { text: "✖️ Discard", callback_data: `discard:${prepared.draft.id}` },
         ],
+        [{ text: "🔗 Open the post", url: c.url }],
       ],
     },
   });
@@ -248,6 +251,21 @@ export async function sendDigest(): Promise<void> {
   const { heartbeatText } = await import("./health.ts");
   await sendText(heartbeatText());
   addEvent("digest", "daily digest sent");
+}
+
+/** Fires at most once a day: gentle ping when the extension captured nothing
+ * for 24h (Telegram reminder replaces any "remember to browse" chore). */
+export async function maybeNudgeIfNoCapture(): Promise<void> {
+  if (isKillOn() || isDryMode) return;
+  const n = countExtensionRowsSince(Date.now() - 24 * 3600_000);
+  if (n > 0) {
+    addEvent("notify", `nudge window checked: ${n} extension rows in 24h, silent`);
+    return;
+  }
+  await sendText(
+    "📭 Nothing captured from the extension in the last 24 hours. A five-minute lap over your saved searches (secondary account) keeps the draft queue fed. This fires at most once a day."
+  );
+  addEvent("notify", "nudge sent (0 extension rows in 24h)");
 }
 
 function lastRunBoundary(key: string, hour: number): number {

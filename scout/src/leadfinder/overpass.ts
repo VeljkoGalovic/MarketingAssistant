@@ -26,7 +26,12 @@ export interface CitySweep {
 
 async function politeFetch(url: string, init?: RequestInit): Promise<Response> {
   await new Promise((r) => setTimeout(r, 1100)); // ≥1 req/s across ALL sources
-  return fetch(url, { ...init, headers: { "User-Agent": UA, ...(init?.headers ?? {}) } });
+  // generous safety net: network/external hangs must never stall the ticker forever
+  return fetch(url, {
+    ...init,
+    headers: { "User-Agent": UA, ...(init?.headers ?? {}) },
+    signal: init?.signal ?? AbortSignal.timeout(60_000),
+  });
 }
 
 export async function geocodeCity(city: string): Promise<CitySweep | null> {
@@ -69,6 +74,7 @@ async function overpassQuery(sweep: CitySweep): Promise<Poi[]> {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({ data: q }),
+    signal: AbortSignal.timeout(75_000), // below their own 90s query budget
   });
   if (!res.ok) throw new Error(`overpass HTTP ${res.status}`);
   const j = (await res.json()) as {
