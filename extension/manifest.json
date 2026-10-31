@@ -10,7 +10,9 @@
   ],
   "host_permissions": [
     "http://localhost:8787/*",
-    "http://127.0.0.1:8787/*"
+    "http://127.0.0.1:8787/*",
+    "http://192.168.0.32:8787/*",
+    "http://100.112.79.18:8787/*"
   ],
   "background": {
     "service_worker": "background.js",
