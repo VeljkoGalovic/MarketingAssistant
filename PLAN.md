@@ -213,3 +213,52 @@ Credential/user artifacts all arrive "at the end" (user instruction): every phas
 - Test subreddit nomination (Phase 3 user task)
 - Seed KB answers (Phase 2 user task, whenever ready)
 - Postgres `DIRECT_URL` stays unused — scout never touches LodgeTrack prod DB (unchanged invariant)
+
+## 14. Execution plan — "15 min/day" operating model (2026-10-31 evening)
+
+Operator commit: ~15 min/day on marketing. Everything else must be automatic or get cut.
+
+### Already live (verified this evening)
+- Reddit server lane: RSS/JSON poller runs unattended (4 seeded subs); Reddit edge currently
+  throttles our IP (429/403 bursts) — poller backoffs correctly; treat as best-effort lane.
+- Telegram control center: bound to chat, quiet hours active, cards + recap 07:00 + digest 09:00.
+- Ingest: LAN-wide 0.0.0.0:8787, healthz 200 from laptop; extension host perms shipped.
+- Tone-lint ("humanizer") on all drafts (Telegram cards + dashboard).
+- Kill switch, per-platform caps, dedupe, CRM canonicalization — running.
+
+### Morning block 1 — finish bring-up (user + agent, ~30 min)
+1. Popup Save&Test → confirm "✅ Scout reachable".
+2. First capture session (15-min loop rehearsal): 5 min LinkedIn secondary-account lap
+   (saved search + one host group) + quick Reddit sanity pass.
+3. Verify rows land: dashboard Queue shows extension:* rows; canary green.
+4. If LinkedIn rows = 0 while relevant content was browsed → fixture-based selector tuning.
+
+### Morning block 2 — friction-killers (agent, ~1 h, no typing required from you)
+5. Draft card: "Open candidate" URL button → tap Draft, tap Open, long-press copy, paste.
+6. Session nudge: if zero extension rows captured by 20:00 local, one gentle Telegram ping.
+   Not a nag — fires once, only when the day produced nothing to work with.
+7. Dashboard drafts: Copy-to-clipboard button (desktop paste-lane convenience).
+
+### Morning block 3 — volume expansion (agent, needs your go once)
+8. Enable OSM lead-finder (SCOUT_LEADFINDER_ENABLED=1) + first city sweep → unattended
+   discovery into CRM; host-name + city seeded from decision list.
+9. Watchlist growth: /watch add as you notice subreddits/groups worth covering.
+
+### Verification block (same day, low effort)
+10. Confirm 07:00 recap + 09:00 digest arrive to the bound chat.
+11. Token rotation (Telegram bot + Google AI key both transited chat) → BotFather /revoke +
+    new key into .env, redeploy. Do AFTER the pipeline is proven.
+
+### Next sprints (gated on real usage data, not on time)
+- Removal/reply scanner (OAuth-only; keep dormant until a Reddit app is ever approved).
+- Email outbound lane — blocked until a warmed outreach domain exists (never Gmail automation).
+- Phase 8 own-page publishing eval: Postiz (mature, company pages) vs pendpost (approval-gate)
+  — decision #13. Not before pipeline proves yield.
+- Metrics to watch weekly: candidates/week, draft-approve rate, paste-through rate, replies.
+  North star: $100/mo recurring within 3 months (tracked in CRM stages).
+
+### Operating loop (the 15 min)
+- 07:00 recap lands → tap Draft on the best 2–3 candidates while coffee cools (~5 min).
+- One 5–8 min LinkedIn lap on the secondary account (saved searches + one group) with the
+  extension loaded — capture is passive; approve/answer cards as they arrive (~10 min).
+- Done. Reddit discovery, drafting, reminders, CRM, nudges: all automatic.
