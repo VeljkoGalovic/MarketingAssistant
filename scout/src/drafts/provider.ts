@@ -126,26 +126,35 @@ async function callOpenAiCompat(
 }
 
 /** Google's OpenAI-compat path 404s on the AQ.-format keys (verified 2026-10-31),
- * so we speak the native generateContent shape. */
+ * so we speak the native generateContent shape. thinkingBudget:0 — 3.x thinks by
+ * default and eats the output budget mid-sentence (observed 2026-10-31). */
 async function callGoogleNative(
   apiKey: string,
   model: string,
   system: string,
   user: string
 ): Promise<string> {
-  const res = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
-    {
+  const call = async (): Promise<Response> =>
+    fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
       method: "POST",
       headers: { "x-goog-api-key": apiKey, "Content-Type": "application/json" },
-      signal: AbortSignal.timeout(45_000),
+      signal: AbortSignal.timeout(30_000),
       body: JSON.stringify({
         system_instruction: { parts: [{ text: system }] },
         contents: [{ role: "user", parts: [{ text: user }] }],
-        generationConfig: { temperature: 0.7, maxOutputTokens: 400 },
+        generationConfig: {
+          temperature: 0.7,
+          maxOutputTokens: 600,
+          thinkingConfig: { thinkingBudget: 0 },
+        },
       }),
-    }
-  );
+    });
+
+  let res = await call();
+  if (res.status === 503 || res.status === 429) {
+    await new Promise((r) => setTimeout(r, 2_500)); // fast-fail overload → one cheap retry
+    res = await call();
+  }
   if (!res.ok) {
     const body = await res.text().catch(() => "");
     throw new Error(`google HTTP ${res.status}: ${body.slice(0, 160)}`);
