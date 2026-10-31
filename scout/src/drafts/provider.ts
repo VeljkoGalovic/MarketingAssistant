@@ -195,7 +195,21 @@ export async function generateDraft(req: DraftRequest): Promise<DraftResult> {
   if (config.llm.google.key) {
     chain.push({
       name: `google:${config.llm.google.model}`,
-      run: (system, user) => callGoogleNative(config.llm.google.key, config.llm.google.model, system, user),
+      run: (system, user) => {
+        // capacity flakes on hot models (3.8-flash 503/timeouts 2026-10-31): configured
+        // model first, then hardcoded same-family fallbacks, first success wins.
+        const models = [config.llm.google.model, "gemini-3.1-flash-lite", "gemini-3-flash-preview"];
+        let lastErr: unknown;
+        for (const m of new Set(models)) {
+          try {
+            return callGoogleNative(config.llm.google.key, m, system, user);
+          } catch (e) {
+            lastErr = e;
+            addEvent("error", `draft google model ${m}: ${String(e).slice(0, 120)}`);
+          }
+        }
+        throw lastErr;
+      },
     });
   }
   if (config.llm.groq.key) {
