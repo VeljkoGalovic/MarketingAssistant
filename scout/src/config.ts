@@ -71,7 +71,7 @@ export const config = {
     provider: str("SCOUT_LLM_PROVIDER", "google"),
     google: {
       key: str("SCOUT_LLM_GOOGLE_KEY"),
-      model: str("SCOUT_LLM_GOOGLE_MODEL", "gemini-2.0-flash"),
+      model: str("SCOUT_LLM_GOOGLE_MODEL", "gemini-3.8-flash"),
     },
     groq: {
       key: str("SCOUT_LLM_GROQ_KEY"),
