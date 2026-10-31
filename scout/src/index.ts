@@ -4,6 +4,11 @@
  * All loops are kill-switch aware and degrade gracefully in dry mode
  * (no Telegram token) and dormant mode (no Reddit/LLM/email creds).
  */
+import net from "node:net";
+// NOTE 2026-10-31: node/undici Happy-Eyeballs (autoSelectFamily) wedges this box's
+// egress — IPv4 attempts ETIMEDOUT inside fetch while raw sockets connect fine,
+// producing the "fetch failed" flaps seen on Telegram/Google. Disabling globally.
+net.setDefaultAutoSelectFamily(false);
 import { config, isDryMode, canPostReddit } from "./config.ts";
 import { addEvent, expireOldDrafts, pruneOldBodies } from "./db.ts";
 import { isKillOn } from "./health.ts";
