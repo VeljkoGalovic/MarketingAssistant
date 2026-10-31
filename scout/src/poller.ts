@@ -44,7 +44,7 @@ async function pollOnce(notify: (candidateId: number) => Promise<void>): Promise
         }
       }
       addEvent("poll", `r/${sub}: ${results.length} scored, ${inserted} new`);
-      await sleep(1500); // be a polite neighbor between subs
+      await sleep(3_000 + Math.random() * 4_000); // polite gap between subs (429s seen 2026-10-31)
     } catch (e) {
       const err = e as { retryAfter?: number };
       if (err.retryAfter) {

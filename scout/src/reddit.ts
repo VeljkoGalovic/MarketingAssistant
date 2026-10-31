@@ -3,7 +3,9 @@ import type { NewCandidate } from "./db.ts";
 import { addEvent } from "./db.ts";
 import { scoreText } from "./keywords.ts";
 
-const USER_AGENT = `web:LodgeTrackScout:v0.1 (by /u/${config.reddit.username})`;
+const USER_AGENT = config.reddit.username
+  ? `web:LodgeTrackScout:v0.1 (by /u/${config.reddit.username})`
+  : "Mozilla/5.0 (X11; Linux x86_64; rv:132.0) Gecko/20100101 Firefox/132.0";
 
 interface RedditListingChild {
   kind: string; // t3 = post, t1 = comment
