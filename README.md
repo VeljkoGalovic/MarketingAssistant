@@ -1,8 +1,8 @@
-# LodgeTrack Growth
+# MarketingAssistant
 
-Marketing automation platform for LodgeTrack: Reddit-first lead scouting, browser-local
-multi-platform scraping (MV3 extension), free-LLM drafting, and Telegram approvals —
-100% free stack, human-in-the-loop.
+Marketing automation platform for [LodgeTrack](https://lodgetrack.com): Reddit-first lead
+scouting, browser-local multi-platform scraping (MV3 extension), free-LLM drafting, and
+Telegram approvals — 100% free stack, human-in-the-loop.
 
 ```
 Extension (browser, read-only) ──► scout /ingest ─┐
@@ -38,7 +38,7 @@ Lead-finder (OSM Overpass, later) ───────────────�
 - [ ] P7 — email lane (LodgeTrack as entity)
 - [ ] P8 — tuning/metrics
 
-> Build status (one pass, care-of no-human loop): Phases 0–6 code-complete and
+> Build status: Phases 0–6 code-complete and
 > dormant — env-gated (dry mode without Telegram, no posting without Reddit creds,
 > leadfinder off by default). Phase 7 email lane = contacts/CSV-export + suppression
 > in place; outbound send integration deferred until the outreach domain + mailbox
