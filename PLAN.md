@@ -201,7 +201,7 @@ Existing scaffold files (config/db/keywords/time/reddit/telegram skeleton) get a
 | **4 — Extension scaffold + LinkedIn** | MV3 skeleton, **LinkedIn adapter (blind build)** + Reddit mirror, fixtures+tests, `/ingest` (LAN+token), in-extension keyword filter, IndexedDB, popup | Creates/uploads secondary LinkedIn account; 2-week warm-up; joins FB+LinkedIn groups | LinkedIn rows flow into the same Telegram queue via `/ingest` |
 | **5 — Extension platforms** | X adapter, FB adapter; runbook baked into digest | Adds target FB groups to watchlist | All adapter platforms green in heartbeat |
 | **6 — Lead-finder + CRM** | OSM Overpass sweeps (Wave A cities) → enrichment → `entities`/`contacts` CRM → Telegram lead cards + weekly funnel digest | Nothing (cities locked in §4) | First enriched lead batch in Telegram |
-| **7 — Email lane** | Warm-domain outbound (LodgeTrack entity), suppression shared, IMAP inbound parsing → CRM + alerts | Provides outreach domain + mailbox creds | First reply lands as CRM state change |
+| **7 — Email lane** | Warm-domain outbound (LodgeTrack entity), suppression shared, IMAP inbound parsing → CRM + alerts. **Status 2026-11-16: draft-on-demand live** (lead recap "✍️ Pitch" → local-language cold email w/ offer + signature + legal note, decisions #15/#16); sending manual (mailto assist); **IMAP inbound reply parsing still pending** | Provides outreach domain + mailbox creds (inbox access for IMAP) | First reply lands as CRM state change |
 | **8 — Tuning** | Keyword tuning from stats, digest-only mode toggle (optional, §3-2), re-baseline against $100 MRR target | Reviews 30/60/90 report | Funnel dashboard + decision point |
 
 Credential/user artifacts all arrive "at the end" (user instruction): every phase ships with dry-mode/mock behavior until the token/secret lands in the 0600 env file.
@@ -251,7 +251,8 @@ Operator commit: ~15 min/day on marketing. Everything else must be automatic or 
 
 ### Next sprints (gated on real usage data, not on time)
 - Removal/reply scanner (OAuth-only; keep dormant until a Reddit app is ever approved).
-- Email outbound lane — blocked until a warmed outreach domain exists (never Gmail automation).
+- Email lane: draft side is live (decisions #15/#16); next up = IMAP inbound reply parsing →
+  CRM state changes + alerts (needs the outreach mailbox creds; sends stay manual, no auto-send).
 - Phase 8 own-page publishing eval: Postiz (mature, company pages) vs pendpost (approval-gate)
   — decision #13. Not before pipeline proves yield.
 - Metrics to watch weekly: candidates/week, draft-approve rate, paste-through rate, replies.
@@ -268,6 +269,29 @@ Operator commit: ~15 min/day on marketing. Everything else must be automatic or 
 | # | Decision | Resolution |
 |---|---|---|
 | 14 | Lead Research & Email Outreach Lane (2026-11-02) | **Adopted with modifications.** Pipeline: daily OSM sweep (1 city/day rotating, NOT weekly batch) → polite crawl (kevincobain2000/email_extractor Go binary, -depth=1 -sleep, replaces/augments in-process enrichWebsite) → DNS MX gate via **Node built-in `dns.promises.resolveMx()`** (dnsrobot/hackertarget/rapid-email-verifier REJECTED: external deps we don't need / unknown hosted services) → research note (Gemini, category+city+machine-readable site signals, zero fabrication) → **draft-on-demand** (lead recap card "✍️ Pitch", not batch-generation) → Telegram card [Copy subject]/[Copy body] + email as plain text (Telegram inline URL buttons reject `mailto:` — dashboard Drafts row carries the real "Open mail app (mailto:)" button). **User choices:** drafts in the **local language** of the venue (Lisbon→PT, Barcelona→ES, Valencia→ES, Zagreb/Split→HR) with English gloss shown beneath; **Amsterdam swapped for Valencia** (NL is opt-in-strict for B2B email). **Status funnel** on `contacts.state`: `new → enriched → sent → responded / bounced / not_interested / bought / skip` — dashboard Pipeline board per column with conversion feed into the $100/mo metric. **Pacing budget:** 10 leads/day surfaced (`SCOUT_LEADS_DAILY_SURFACED`); excess leads stay queued as `enriched` and surface on later days. **Guardrails inherited:** 20/day first-touch cap, no auto-send ever (mailto = assist in your mail client), 48 h draft expiry, `/stop` kills the whole lane, 180-day domain hold on skip/bounce/no-email. **Retry rule:** crawler no-email + MX fail → `skip`, no re-probe for 180 days. Data model = **columns on existing entities/contacts** (no parallel leads table) to keep one CRM brain. |
+| 15 | Cold-email draft quality (2026-11-15; user report: Faro draft rendered as a wall of text with two closing questions, no greeting, no sign-off) | **Prompt v2 + pipeline hardening, deployed & E2E-verified on the failing Faro case.** `COLD_EMAIL_VOICE` rewritten around a strict OUTPUT FORMAT scaffold (🎯 lead card → ✉️ OUTREACH DRAFT in the local language → 🌐 English approval gloss), 80–120 words in 3 short paragraphs, greeting → personalized hook → pitch → **single** low-friction CTA, localized sign-off. Code side: new line-preserving `sanitizeEmailDraft` (the shared `sanitizeDraft` collapses blank lines and fused `Subject:` into the body — the actual cause of the run-on), new `parseColdEmailOutput` for the scaffold with the legacy parser kept as fallback, cold-email LLM budget raised 600 → 1500 output tokens, and optional `contactEmail` passed into the voice so the greeting adapts (general inbox vs named contact). Backups `*.bak-20261115` on the box. |
+| 16 | Offer + real signature + anti-call rules (2026-11-16; user's hand-crafted email as the template) | **Deployed & E2E-verified.** Every cold email now carries: the early-adopter offer — **`SCOUT_OUTREACH_DISCOUNT` (default 20%)** with **`SCOUT_OUTREACH_PROMO_CODE` (default K5NJQXOQ)**, stated exactly, never altered or invented; the **real signature block** (localized closing, Veljko Galović, LodgeTrack, Podgorička 3/14, 25000 Sombor, Serbia); and a **localized** Legal & Privacy note (contact details obtained from public business info; reply "Unsubscribe" → immediate removal; optional `SCOUT_OUTREACH_UNSUBSCRIBE_URL` adds a click-here link when the user hosts a page). **Calls banned absolutely:** no phone/video/in-person/"quick call" offers ever — the sender works asynchronously by design (mails go out ~90% automated; the founder cannot hop on calls). The old "2-minute walkthrough video" promise was removed (the automated flow cannot guarantee the deliverable); the CTA is now "continue the conversation directly right here over email". Parser made tolerant to Gemini dropping the `**Body:**` label line (observed 2026-11-16 — it silently fell to the legacy path and produced a run-on body with the gloss lost; fixed, offline-tested incl. fused-subject rejection). `COLD_EMAIL_VOICE` exported for prompt-capture debugging. Word budget counts only the 3 body paragraphs (signature + legal note excluded). |
+
+### Cold-email lane — deployed state (2026-11-16)
+
+Live on `veljkoserver` (Tailscale `100.112.79.18`) at `/opt/lodgetrack-scout/scout`, systemd
+`lodgetrack-scout.service`, root-owned 0600 `.env`. The lead-finder → research → draft-on-demand
+flow works end to end; sending stays manual (Telegram card / dashboard mailto assist).
+
+**Done:**
+- v2 cold-email prompt + offer/signature/legal-note rules (decisions #15, #16), parser hardening,
+  raised token budget — verified live against the original failing case (Pure Formosa, Faro).
+- Promo code + discount + unsubscribe URL all env-configurable (rotate without code changes).
+
+**Still pending:**
+- **IMAP inbound reply parsing** → automatic CRM `sent → responded` state changes + Telegram
+  notification (decision #1/#14) — not built yet.
+- **Local repo sync:** this checkout (`~/MarketingAssistant`) predates the whole email lane —
+  the deployed tree is the source of truth until synced.
+- Unsubscribe click-through page: env slot ready, unset until the user hosts one.
+- US Wave C cities (Nashville/New York/Miami) not yet in the sweep rotation; the English
+  fallback lane works for unmapped cities (no gloss by design).
+- Token rotation (§14 verification block) — verify whether still outstanding.
 
 ### Decision #14 — pre-build verification results (2026-11-02)
 - `email_extractor-linux-amd64` v3.4 (7.3 MB) downloaded to `/opt/lodgetrack-scout/bin/`, runs clean on the box,
