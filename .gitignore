@@ -1,0 +1,10 @@
+# secrets & runtime state — never enter the repo (0600 discipline, PLAN §11)
+.env
+data/
+# vendored deps & staged binaries (email_extractor stays outside git)
+node_modules/
+bin/
+# ops artifacts: pre-git patch backups
+*.bak-*
+# OS/editor noise
+.DS_Store
