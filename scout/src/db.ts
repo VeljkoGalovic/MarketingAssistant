@@ -93,6 +93,24 @@ CREATE INDEX IF NOT EXISTS ix_drafts_status ON drafts(status, expires_at);
 CREATE INDEX IF NOT EXISTS ix_contacts_entity ON contacts(entity_id);
 `);
 
+// ---- additive migrations (SQLite has no ADD COLUMN IF NOT EXISTS) ----
+function ensureColumn(table: string, col: string, ddl: string): void {
+  const cols = (db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).map(
+    (c) => c.name
+  );
+  if (!cols.includes(col)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${ddl}`);
+}
+// decision #14: lead lane columns on the existing CRM (no parallel leads table)
+ensureColumn("entities", "category", "category TEXT");          // osm tourism tag
+ensureColumn("entities", "country", "country TEXT");            // resolved from city
+ensureColumn("entities", "research_note", "research_note TEXT");// LLM 2-liner, no fabrication
+ensureColumn("entities", "email_source", "email_source TEXT");  // osm | crawler | manual
+ensureColumn("entities", "email_validated", "email_validated INTEGER DEFAULT 0");
+ensureColumn("entities", "first_contacted_at", "first_contacted_at INTEGER");
+ensureColumn("entities", "last_contacted_at", "last_contacted_at INTEGER");
+ensureColumn("drafts", "subject", "subject TEXT");              // cold emails carry subject
+db.exec("CREATE INDEX IF NOT EXISTS ix_entities_email_valid ON entities(email_canon, email_validated);");
+
 const now = () => Date.now();
 
 // ---------------- candidates ----------------
@@ -205,6 +223,7 @@ export interface Draft {
   id: number;
   candidate_id: number | null;
   channel: string;
+  subject: string | null;
   body: string;
   status: string;
   provider: string | null;
@@ -215,27 +234,43 @@ export interface Draft {
 }
 
 const insertDraftStmt = db.prepare(`
-  INSERT INTO drafts (candidate_id, channel, body, status, provider, expires_at, created_at, updated_at)
-  VALUES (@candidate_id, @channel, @body, @status, @provider, @expires_at, @now, @now)
+  INSERT INTO drafts (candidate_id, channel, subject, body, status, provider, expires_at, created_at, updated_at)
+  VALUES (@candidate_id, @channel, @subject, @body, @status, @provider, @expires_at, @now, @now)
   RETURNING *
 `);
 
+/** subject only used by the email lane (channel='email'). */
 export function createDraft(
   candidateId: number | null,
   channel: string,
   body: string,
-  provider: string
+  provider: string,
+  subject: string | null = null
 ): Draft {
   const expiresAt = now() + config.drafts.expireHours * 3600_000;
   return (insertDraftStmt.get({
     candidate_id: candidateId,
     channel,
+    subject,
     body,
     status: "drafted",
     provider,
     expires_at: expiresAt,
     now: now(),
   }) ?? null) as unknown as Draft;
+}
+
+/** Email-lane draft helper (drafts row carries subject + provider; entity link travels in callbacks). */
+export function createEmailDraft(entityId: number, subject: string, body: string, provider: string): Draft {
+  const d = createDraft(null, "email", body, provider, subject);
+  db.prepare("INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
+    .run(`draft:${d.id}:entity`, String(entityId));
+  return d;
+}
+
+export function emailDraftEntity(draftId: number): number | null {
+  const v = getSetting(`draft:${draftId}:entity`);
+  return v ? Number(v) : null;
 }
 
 export function getDraftById(id: number): Draft | undefined {
@@ -329,6 +364,13 @@ export interface Entity {
   city: string | null;
   source: string;
   external_id: string | null;
+  category: string | null;
+  country: string | null;
+  research_note: string | null;
+  email_source: string | null;
+  email_validated: number;
+  first_contacted_at: number | null;
+  last_contacted_at: number | null;
   created_at: number;
 }
 
@@ -396,8 +438,8 @@ export function findEntityByCanon(
   }
   if (domain) {
     const hit = db
-      .prepare("SELECT * FROM entities WHERE domain_canon = ? OR website_hint = ?")
-      .get(canonicalizeDomain(domain), canonicalizeDomain(domain)) as Entity | undefined;
+      .prepare("SELECT * FROM entities WHERE domain_canon = ?")
+      .get(canonicalizeDomain(domain)) as Entity | undefined;
     if (hit) return hit;
   }
   return undefined;
@@ -428,6 +470,103 @@ export function upsertContact(entityId: number, channel: string, state: string, 
     ).run(entityId, channel, state, note ?? null, state === "contacted" ? now() : null, now(), now());
   }
   addEvent("contact", `${entityId} ${channel} -> ${state}`);
+}
+
+// ---------------- lead lane (decision #14) ----------------
+
+/** The email-funnel states over the letter codes in contacts.state:
+ *  new|enriched|contactable → queued; sent → responded|bounced|not_interested|bought|skip */
+export const LEAD_READY_STATES = "('new', 'enriched', 'contactable')";
+
+export interface LeadReady {
+  entity_id: number;
+  name: string;
+  email: string;
+  city: string | null;
+  country: string | null;
+  category: string | null;
+  research_note: string | null;
+  created_at: number;
+}
+
+/** Leads surfaced in the morning recap: MX-validated, not contacted, suppression-aware. */
+export function leadsReady(limit: number): LeadReady[] {
+  return db
+    .prepare(
+      `SELECT e.id AS entity_id, e.name, e.email_canon AS email, e.city, e.country,
+              e.category, e.research_note, e.created_at
+       FROM entities e
+       WHERE e.email_canon IS NOT NULL AND e.email_validated = 1
+         AND (e.last_contacted_at IS NULL OR e.last_contacted_at > ?)
+         AND EXISTS (SELECT 1 FROM contacts c WHERE c.entity_id = e.id AND c.channel='email' AND c.state IN ${LEAD_READY_STATES})
+         AND NOT EXISTS (SELECT 1 FROM contacts c2 WHERE c2.entity_id = e.id AND c2.channel='email' AND
+              c2.state IN ('sent','responded','bounced','not_interested','declined','do_not_contact'))
+       ORDER BY e.created_at DESC LIMIT ?`
+    )
+    .all(now() - 180 * 24 * 3600_000, limit) as LeadReady[];
+}
+
+export interface LeadRow {
+  entity_id: number;
+  name: string;
+  email: string | null;
+  city: string | null;
+  country: string | null;
+  category: string | null;
+  research_note: string | null;
+  phone: string | null;
+  domain: string | null;
+  state: string | null;
+}
+
+export function getLead(entityId: number): LeadRow | undefined {
+  return db
+    .prepare(
+      `SELECT e.id AS entity_id, e.name, e.email_canon AS email, e.city, e.country, e.category,
+              e.research_note, e.phone_canon AS phone, e.domain_canon AS domain,
+              (SELECT c.state FROM contacts c WHERE c.entity_id = e.id AND c.channel = 'email'
+                 ORDER BY c.updated_at DESC LIMIT 1) AS state
+       FROM entities e WHERE e.id = ?`
+    )
+    .get(entityId) as LeadRow | undefined;
+}
+
+/** Funnel transition; `sent` stamps first/last contact (that's the outreach moment). */
+export function setLeadStatus(
+  entityId: number,
+  state: "sent" | "responded" | "bounced" | "not_interested" | "bought" | "contactable" | "skip",
+  note?: string
+): void {
+  const ts = now();
+  upsertContact(entityId, "email", state, note);
+  if (state === "sent") {
+    db.prepare(
+      "UPDATE entities SET first_contacted_at = COALESCE(first_contacted_at, ?), last_contacted_at = ? WHERE id = ?"
+    ).run(ts, ts, entityId);
+  }
+  addEvent("lead", `entity ${entityId} → ${state}`);
+}
+
+export function setEntityResearch(
+  entityId: number,
+  category: string,
+  country: string,
+  researchNote: string,
+  emailSource: string,
+  validated: boolean
+): void {
+  db.prepare(
+    "UPDATE entities SET category = ?, country = ?, research_note = ?, email_source = ?, email_validated = ? WHERE id = ?"
+  ).run(category, country, researchNote, emailSource, validated ? 1 : 0, entityId);
+}
+
+/** Caps: how many email first-touches happened since timestamp. */
+export function countEmailTouchesSince(sinceMs: number): number {
+  return (
+    db
+      .prepare("SELECT COUNT(*) AS n FROM entities WHERE first_contacted_at >= ?")
+      .get(sinceMs) as { n: number }
+  ).n;
 }
 
 /** Hard block: contacted/replied/declined on this channel within 180 days. */

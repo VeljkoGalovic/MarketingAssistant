@@ -102,7 +102,7 @@ function startMaintenance(): void {
   }, 3600_000);
 }
 
-// ---- lead-finder weekly ticker ----
+// ---- lead-finder daily 1-city rotation (decision #14) ----
 
 function startLeadfinder(): void {
   if (!config.leadfinder.enabled) {
@@ -111,15 +111,20 @@ function startLeadfinder(): void {
   }
   const runIfDue = async () => {
     if (isKillOn()) return;
-    const intervalMs = config.leadfinder.intervalDays * 24 * 3600_000;
-    const last = Number(getSetting("last_sweep") ?? "0");
-    if (Date.now() - last >= intervalMs) {
-      setSetting("last_sweep", String(Date.now()));
-      try {
-        await sweepCities();
-      } catch (e) {
-        addEvent("error", `leadfinder: ${String(e)}`);
-      }
+    const todayKey = new Date().toISOString().slice(0, 10);
+    const lastSweepDay = getSetting("last_sweep_day") ?? "";
+    if (lastSweepDay === todayKey) return; // already ran today
+    // pick today's city: day-of-year modulo N cities (stable rotation)
+    const cities = config.leadfinder.cities.split(",").map((c) => c.trim()).filter(Boolean);
+    if (!cities.length) return;
+    const dayOfYear = Math.floor((Date.now() - Date.UTC(new Date().getFullYear(), 0, 0)) / 86400000);
+    const todayCity = cities[dayOfYear % cities.length];
+    setSetting("last_sweep_day", todayKey);
+    addEvent("lead", `daily sweep → ${todayCity} (day ${dayOfYear})`);
+    try {
+      await sweepCities(todayCity);
+    } catch (e) {
+      addEvent("error", `leadfinder ${todayCity}: ${String(e)}`);
     }
   };
   setInterval(runIfDue, 3600_000);

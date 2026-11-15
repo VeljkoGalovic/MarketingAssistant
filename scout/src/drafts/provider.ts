@@ -37,6 +37,170 @@ export interface DraftResult {
   provider: string;
 }
 
+/** Cold-email system voice (decision #14, revised 2026-11-15/16): full localization +
+ * strict layout (3 short paragraphs, single email-only CTA), early-adopter discount +
+ * promo code in every email, real sender signature with legal/privacy + unsubscribe
+ * note, and an absolute ban on offering calls/meetings of any kind. Language still
+ * comes from CITY_LANGUAGE; discount/code/URL from config; zero fabrication stays.
+ * Exported for debugging/prompt-capture tooling. */
+export const COLD_EMAIL_VOICE = (language: string, includeEnglishGloss: boolean) => `
+You are an outbound B2B outreach specialist writing personalized cold emails on behalf of Veljko Galović, the founder of LodgeTrack (lodgetrack.com)—a free-to-try property management platform built by a property owner for small boutique hotels, guesthouses, and short-term rentals (3–15 units). LodgeTrack centralizes booking calendars, cleaning team coordination, pricing, and guest messaging into one simple interface.
+
+### TASK
+Given a target property's details (name, location, website notes, and contact email), write a concise, personalized cold email in the **local business language** of the target property's country.
+
+### STRICT RULES
+1. **Dynamic Language & Localization:** Detect the country of the target property and write the outreach email in that country's native business language (e.g., European Portuguese for Portugal, Spanish for Spain, German for Germany, French for France, English for the UK/US). Use natural, polite local hospitality terminology (such as *alojamento local* in Portugal or *casas rurales* in Spain) rather than literal translations.
+2. **Formatting & Length:** The three body paragraphs together must stay between **80 and 120 words** (the greeting, sign-off block, and Legal & Privacy Note do not count). Break the text into **3 short paragraphs** (1–2 sentences each) with blank lines between them. Never output a single wall of text.
+3. **Structure:**
+   - **Greeting:** Polite, localized greeting addressed to the specific contact name if provided, or the property team if using a general inbox.
+   - **Paragraph 1 (The Hook):** One specific, genuine observation about their property (design, neighborhood landmark, guest experience, or local vibe) based on the research provided. Do not mention LodgeTrack here.
+   - **Paragraph 2 (The Pitch + Offer):** Introduce Veljko as a fellow property owner who built LodgeTrack to simplify day-to-day property management, and mention the early-adopter offer: an **exclusive ${config.outreachDiscount} discount** using the **promo code ${config.outreachPromoCode}** (always state the code exactly as written, never alter or invent a different one). Frame it naturally as part of the pitch — not as a countdown-pressure sales gimmick.
+   - **Paragraph 3 (Single Low-Friction CTA):** Invite them to continue the conversation **directly right here over email** so you can share more details on how it fits into their workflow. **CRITICAL — ASYNCHRONOUS ONLY:** Never offer, suggest, or hint at a phone call, video meeting, in-person demo, or any form of real-time conversation — not even a "quick call" or "2-minute call". The sender cannot take calls under any circumstances; every email must be answerable by email alone.
+   - **Sign-off block (exactly this shape, closing line localized, rest verbatim):**
+     [Localized closing, e.g. "Com os melhores cumprimentos" / "Un cordial saludo" / "Best regards"],
+
+     Veljko Galović
+
+     LodgeTrack
+
+     Podgorička 3/14, 25000 Sombor, Serbia
+
+     Legal & Privacy Note: [localized translation of:] "I obtained your contact details from publicly available business information on your website. If you prefer not to receive further emails regarding LodgeTrack, simply reply to this email with the word \"Unsubscribe\"${config.outreachUnsubscribeUrl ? ` or click here: ${config.outreachUnsubscribeUrl}` : ""} and your address will be removed immediately."
+4. **No Fluff:** Avoid pushy sales clichés, exclamation marks, or buzzwords like "revolutionize" or "game-changer."
+
+### OUTPUT FORMAT
+Output the result using the exact layout below so the Subject, Body, and English translation are cleanly separated for quick review and copy-pasting:
+
+🎯 **[Property Name]** — [City, Country]
+**To:** [Email Address]
+
+---
+### ✉️ OUTREACH DRAFT ([Detected Language])
+
+**Subject:** [Short, personalized subject line, max 7 words]
+
+**Body:**
+[Greeting]
+
+[Paragraph 1: Personalized Hook]
+
+[Paragraph 2: Value Proposition + ${config.outreachDiscount} discount, promo code ${config.outreachPromoCode}]
+
+[Paragraph 3: Continue-over-email CTA]
+
+[Localized closing],
+
+Veljko Galović
+
+LodgeTrack
+
+Podgorička 3/14, 25000 Sombor, Serbia
+
+[Localized Legal & Privacy Note]
+
+---
+### 🌐 ENGLISH TRANSLATION (For Approval Only — Do Not Copy)
+
+**Subject:** [English translation of subject]
+
+**Body:**
+[Exact English translation matching the paragraph breaks, sign-off block, and legal note above]
+
+---
+System-provided facts for this email (use as given, they override your own detection):
+- Country and language (authoritative): ${language}
+- Early-adopter offer: ${config.outreachDiscount} discount, promo code ${config.outreachPromoCode} (exact, unchanged)
+${includeEnglishGloss ? "" : "- The email above is already in English; omit the ENGLISH TRANSLATION section and end after the OUTREACH DRAFT section.\n"}
+Reproduce the layout above literally, including the 🎯/✉️/🌐 markers and the --- separator lines: the approval pipeline parses on them.
+`;
+
+/** city → language for the cold-email lane (decision #14 user choice: local language).
+ * 2026-11-05: Croatian cities (Zagreb/Split) swapped out for Palma + Faro — no
+ * new language lanes needed; existing HR-city rows fall back to English. */
+export const CITY_LANGUAGE: Record<string, { lang: string; englishGloss: boolean }> = {
+  lisbon: { lang: "Portuguese (Portugal)", englishGloss: true },
+  faro: { lang: "Portuguese (Portugal)", englishGloss: true },
+  barcelona: { lang: "Spanish (Spain)", englishGloss: true },
+  valencia: { lang: "Spanish (Spain)", englishGloss: true },
+  "palma de mallorca": { lang: "Spanish (Spain)", englishGloss: true },
+};
+
+export interface ColdEmailRequest {
+  name: string;
+  city: string | null;
+  category: string | null;
+  researchNote: string | null;
+  website: string | null;
+  /** Recipient email (To:) — lets the voice pick the right greeting for a general
+   * inbox (geral@/info@) vs a named contact (2026-11-15 prompt revision). */
+  contactEmail?: string | null;
+  language: string;
+  englishGloss: boolean;
+}
+
+export interface ColdEmailResult {
+  subject: string;
+  body: string;
+  provider: string;
+}
+
+export async function generateColdEmail(req: ColdEmailRequest): Promise<ColdEmailResult | null> {
+  if (!config.llm.google.key) return null;
+  const kb = matchKb(`${req.name} ${req.category ?? ""} ${req.researchNote ?? ""}`);
+  const material = [
+    `Business: ${req.name}`,
+    `Type: ${req.category ?? "vacation-rental or small accommodation operator"}`,
+    `City: ${req.city ?? "-"}`,
+    `Website: ${req.website ?? "-"}`,
+    `Contact email (To): ${req.contactEmail ?? "-"}`,
+    `Facts you may use (from a factual LLM pass, do not add your own): ${req.researchNote ?? "no extra facts"}`,
+    `Material about the product: ${kb.length ? kbToText(kb).slice(0, 900) : config.outreachValueProp}`,
+    `Value proposition (usable verbatim): ${config.outreachValueProp}`,
+  ].join("\n");
+  const system = COLD_EMAIL_VOICE(req.language, req.englishGloss);
+
+  for (const attempt of [1, 2]) {
+    try {
+      const raw = await callGoogleNative(config.llm.google.key, config.llm.google.model, system, material, 1500);
+      let result: ColdEmailResult | null = null;
+      // 2026-11-15 format: scaffold → OUTREACH DRAFT → ENGLISH TRANSLATION, parsed with
+      // line structure preserved (paragraph breaks are part of the deliverable).
+      const parsed = parseColdEmailOutput(sanitizeEmailDraft(raw));
+      if (parsed && parsed.subject && parsed.localBody) {
+        result = {
+          subject: parsed.subject,
+          body: parsed.gloss ? `${parsed.localBody}\n\n----\n${parsed.gloss}` : parsed.localBody,
+          provider: `google:${config.llm.google.model}`,
+        };
+      } else {
+        // legacy fallback (pre-2026-11-15 shape: "Subject:" line + "----" gloss)
+        const text = sanitizeDraft(raw);
+        const subjectM = text.match(/subject\s*:\s*(.+)/i);
+        const subject = subjectM?.[1]?.trim() ?? "";
+        const splitAt = text.indexOf("----");
+        const bodyPart = (splitAt > 0 ? text.slice(0, splitAt) : text).replace(/^subject\s*:.+\n+/i, "").trim();
+        const englishPart = splitAt > 0 ? text.slice(splitAt + 4).trim() : "";
+        if (subject && bodyPart) {
+          result = {
+            subject,
+            body: englishPart ? `${bodyPart}\n\n----\n${englishPart}` : bodyPart,
+            provider: `google:${config.llm.google.model}`,
+          };
+        }
+      }
+      if (!result) {
+        addEvent("error", `cold email attempt ${attempt}: unparseable output (${String(raw).slice(0, 80)}…)`);
+        continue;
+      }
+      return result;
+    } catch (e) {
+      addEvent("error", `cold email attempt ${attempt}: ${String(e).slice(0, 120)}`);
+    }
+  }
+  return null;
+}
+
 /** Deterministic tone-lint — the "humanizer" idea stolen from the tools we evaluated
  * (2026-10-31): flags AI-writing tells / hype *before* a draft is shown. No model call. */
 const LINT_PATTERNS: Array<{ re: RegExp; why: string }> = [
@@ -57,6 +221,9 @@ const LINT_PATTERNS: Array<{ re: RegExp; why: string }> = [
   { re: /\bgreat (question|post|point|topic)\b/i, why: "AI-tell: validation opener" },
   { re: /\btotally understand(able)?\b/i, why: "AI-tell: empty reassurance" },
   { re: /\bhope this helps\b/i, why: "AI-tell: filler closer" },
+  { re: /i hope (this|my) email finds you well/i, why: "mail-merge: 'email finds you well'" },
+  { re: /\bi wanted to (reach out|touch base)\b/i, why: "mail-merge: 'wanted to reach out'" },
+  { re: /\btrusted by\b/i, why: "hype: social proof claim" },
   { re: /^\s*(great|awesome|good)\s+(one|one here)\b/i, why: "AI-tell: hollow opener" },
 ];
 
@@ -82,6 +249,77 @@ export function sanitizeDraft(text: string): string {
 
 export function lintDraft(text: string): string[] {
   return LINT_PATTERNS.filter((p) => p.re.test(text)).map((p) => p.why);
+}
+
+/** Cold-email variant of sanitizeDraft (2026-11-15): regular sanitizeDraft collapses
+ * ALL whitespace runs incl. newlines, which fused the Subject line into the first
+ * body sentence and erased paragraph breaks (observed on Faro drafts). Here the
+ * line structure IS the deliverable (3 paragraphs + scaffold), so only horizontal
+ * space is normalized; markdown markers are stripped; em-dashes are left alone. */
+export function sanitizeEmailDraft(text: string): string {
+  let t = text.trim();
+  if (
+    (t.startsWith('"') && t.endsWith('"')) ||
+    (t.startsWith("\u201c") && t.endsWith("\u201d"))
+  ) {
+    t = t.slice(1, -1);
+  }
+  t = t
+    .split("\n")
+    .map((line) => line.replace(/[ \t]{2,}/g, " ").trimEnd())
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n"); // cap blank-line runs at one blank line
+  t = t.replace(/\*\*([^*\n]+)\*\*/g, "$1"); // bold
+  t = t.replace(/\*([^*\n]+)\*/g, "$1"); // italics
+  t = t.replace(/^\s*#{1,6}\s+/gm, ""); // headings
+  return t.trim();
+}
+
+/** Parser for the 2026-11-15 OUTPUT FORMAT. Extracts Subject + Body of the OUTREACH
+ * DRAFT section and the ENGLISH TRANSLATION section, drops the 🎯/To: scaffold, and
+ * keeps the long-standing storage contract: local body + "\n\n----\n" + gloss.
+ * 2026-11-16: the "Body:" label line is OPTIONAL — Gemini 3 usually skips it and
+ * goes straight from the Subject line to the greeting (observed), so the body now
+ * defaults to "everything after the Subject line, cut at the --- separator". */
+export function parseColdEmailOutput(
+  text: string
+): { subject: string; localBody: string; gloss: string } | null {
+  const draftIdx = text.search(/OUTREACH DRAFT/i);
+  if (draftIdx < 0) return null;
+  const transIdx = text.search(/ENGLISH TRANSLATION/i);
+  const afterDraft = transIdx > draftIdx ? text.slice(draftIdx, transIdx) : text.slice(draftIdx);
+
+  // One output section: find its Subject line; body = text after the subject line
+  // (or after an optional "Body:" label), always cut at the first --- separator.
+  const section = (chunk: string): { subject: string; body: string } | null => {
+    const subjectM = chunk.match(/^[ \t]*Subject:[ \t]*(.+)$/im);
+    if (!subjectM || subjectM.index === undefined) return null;
+    const subject = subjectM[1].trim();
+    // a compliant subject is ≤ ~7 words; a long capture means the model fused the
+    // subject and body into one line — unparseable, let the caller retry/fall back
+    if (subject.split(/\s+/).length > 15) return null;
+    let body = chunk.slice(subjectM.index + subjectM[0].length);
+    const bodyLabelM = body.match(/^[ \t]*Body:[ \t]*$/im);
+    if (bodyLabelM && bodyLabelM.index !== undefined) {
+      body = body.slice(bodyLabelM.index + bodyLabelM[0].length);
+    } else {
+      const inlineM = body.match(/^[ \t]*Body:[ \t]*(.+)$/im);
+      if (inlineM && inlineM.index === 0) body = body.slice(inlineM[0].length);
+    }
+    const dash = body.match(/^[ \t]*-{3,}[ \t]*$/m);
+    if (dash && dash.index !== undefined) body = body.slice(0, dash.index);
+    return { subject, body: body.trim() };
+  };
+
+  const draft = section(afterDraft);
+  if (!draft || !draft.body) return null;
+
+  let gloss = "";
+  if (transIdx > draftIdx) {
+    const tr = section(text.slice(transIdx));
+    if (tr?.body) gloss = tr.subject ? `Subject: ${tr.subject}\n\n${tr.body}` : tr.body;
+  }
+  return { subject: draft.subject, localBody: draft.body, gloss };
 }
 
 function kbToText(entries: KbEntry[]): string {
@@ -128,11 +366,12 @@ async function callOpenAiCompat(
 /** Google's OpenAI-compat path 404s on the AQ.-format keys (verified 2026-10-31),
  * so we speak the native generateContent shape. thinkingBudget:0 — 3.x thinks by
  * default and eats the output budget mid-sentence (observed 2026-10-31). */
-async function callGoogleNative(
+export async function callGoogleNative(
   apiKey: string,
   model: string,
   system: string,
-  user: string
+  user: string,
+  maxOutputTokens = 600
 ): Promise<string> {
   const call = async (): Promise<Response> =>
     fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
@@ -144,7 +383,7 @@ async function callGoogleNative(
         contents: [{ role: "user", parts: [{ text: user }] }],
         generationConfig: {
           temperature: 0.7,
-          maxOutputTokens: 600,
+          maxOutputTokens,
           thinkingConfig: { thinkingBudget: 0 },
         },
       }),

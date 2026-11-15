@@ -153,10 +153,14 @@ export function heartbeatText(): string {
   const canaries = platforms
     .map((p) => `${p}=${canaryFor(p)}`)
     .join(" · ");
+  const { countEmailTouchesSince, leadsReady } = require("./db.ts");
+  const touched = countEmailTouchesSince(new Date().setHours(0, 0, 0, 0));
+  const ready = leadsReady(999).length;
   return [
     "📡 <b>Daily heartbeat</b>",
     `candidates: ${s.total} (pending: ${s.pending ?? 0}, notified: ${s.notified ?? 0}, skipped: ${s.skipped ?? 0})`,
     `leads: ${s.leads ?? 0} · contacted: ${s.contacted ?? 0} · replied: ${s.replied ?? 0}`,
+    `lead lane: ${ready} funnel-ready · ${touched}/${config.caps.emailFirstTouchDay} touches today`,
     `extraction canary: ${canaries}`,
     `banned subs: ${[...subs].join(", ") || "none"}`,
     `kill switch: ${isKillOn() ? "🔴 ON" : "🟢 off"} · poster: ${getSetting("poster_paused") === "1" ? "⏸ paused" : "▶ active"}`,

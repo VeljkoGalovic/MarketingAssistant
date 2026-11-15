@@ -4,10 +4,18 @@ import {
   canonicalizeEmail,
   canonicalizeDomain,
   db,
+  findEntityByCanon,
   isContactBlocked,
+  setEntityResearch,
   upsertContact,
   upsertEntity,
 } from "../db.ts";
+import dns from "node:dns";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+import { generateResearchNote } from "../drafts/research.ts";
+
+const execFileP = promisify(execFile);
 
 /**
  * Lead-finder (Phase 6, PLAN §4): OSM Overpass sweeps per city →
@@ -50,12 +58,13 @@ export async function geocodeCity(city: string): Promise<CitySweep | null> {
   }
 }
 
-export interface Poi {
+interface Poi {
   osmType: string;
   osmId: number;
   name: string;
   website?: string;
   phone?: string;
+  category?: string | null;
   city: string;
   lat: number;
   lon: number;
@@ -94,6 +103,7 @@ async function overpassQuery(sweep: CitySweep): Promise<Poi[]> {
       name: el.tags?.name ?? "",
       website: el.tags?.website ?? el.tags?.["contact:website"],
       phone: el.tags?.phone ?? el.tags?.["contact:phone"],
+      category: el.tags?.tourism ?? el.tags?.amenity ?? null,
       city: sweep.city,
       lat: el.lat ?? el.center?.lat ?? 0,
       lon: el.lon ?? el.center?.lon ?? 0,
@@ -149,15 +159,69 @@ function safeDomain(website: string): string | undefined {
   }
 }
 
-/** Run one full sweep across the configured cities. Threshold-controlled. */
-export async function sweepCities(): Promise<void> {
+/** email_extractor Go binary (decision #14, pre-staged at /opt/lodgetrack-scout/bin/).
+ * Local binary, no API, honors our politeness flags; falls back to the light
+ * in-process scraper when the binary is missing. */
+export async function crawlEmails(website: string): Promise<string | null> {
+  const bin = process.env.SCOUT_CRAWLER_BIN ?? "/opt/lodgetrack-scout/bin/email_extractor";
+  try {
+    await execFileP(
+      bin,
+      [`-url=${website}`, "-depth=1", "-limit-urls=8", "-limit-emails=10", "-sleep=1200", "-timeout=8000", "-out=/tmp/lodgetrack-ee.txt"],
+      { timeout: 45_000 }
+    );
+    const fs = await import("node:fs");
+    const file = fs.readFileSync("/tmp/lodgetrack-ee.txt", "utf8");
+    const emails = file
+      .split("\n")
+      .map((l) => l.trim())
+      .filter((l) => /.+@.+\..+/.test(l) && !/\.png|\.jpg|example\.com|cloudflare|sentry|wixpress|@(no-?reply|smtp)/i.test(l));
+    const role = emails.find((e) => /^(info|booking|contact|office|hello|rezerv|recep|stay)[._-]?/i.test(e));
+    const chosen = role ?? emails.find((e) => !/(gmail|yahoo|hotmail|outlook|icloud)\./i.test(e)) ?? emails[0];
+    fs.rmSync("/tmp/lodgetrack-ee.txt", { force: true });
+    return chosen ?? null;
+  } catch (e) {
+    addEvent("error", `crawler ${website.slice(0, 60)}: ${String(e).slice(0, 90)}`);
+    try {
+      const fallback = await enrichWebsite(website);
+      return fallback.email ?? null;
+    } catch {
+      return null;
+    }
+  }
+}
+
+/** MX gate: Node built-in resolver (decision #14 — no external validation services). */
+export async function hasMx(domain: string): Promise<boolean> {
+  try {
+    const recs = await dns.promises.resolveMx(domain);
+    return Array.isArray(recs) && recs.length > 0;
+  } catch {
+    return false;
+  }
+}
+
+const CITY_COUNTRY: Record<string, string> = {
+  lisbon: "Portugal",
+  porto: "Portugal",
+  faro: "Portugal",
+  barcelona: "Spain",
+  valencia: "Spain",
+  "palma de mallorca": "Spain",
+  seville: "Spain",
+};
+
+/** Run one full sweep. decision #14 modification: pass ONE city to rotate the
+ * daily-rotation stream; omit to sweep all configured cities (legacy/weekly). */
+export async function sweepCities(onlyCity?: string): Promise<void> {
   if (!config.leadfinder.enabled) {
     addEvent("lead", "leadfinder disabled (SCOUT_LEADFINDER_ENABLED)");
     return;
   }
   const cities = config.leadfinder.cities.split(",").map((c) => c.trim()).filter(Boolean);
+  const run = onlyCity ? cities.filter((c) => c.toLowerCase() === onlyCity.toLowerCase()) : cities;
   let total = 0;
-  for (const city of cities) {
+  for (const city of run) {
     if (total >= config.leadfinder.maxPerRun) break;
     const sweep = await geocodeCity(city);
     if (!sweep) {
@@ -176,35 +240,72 @@ export async function sweepCities(): Promise<void> {
       const domain = poi.website ? safeDomain(poi.website) : undefined;
       if (!poi.website && !poi.phone) continue;
 
-      const entityId = upsertEntity({
+      // dedupe merge: same domain already known → enrich THAT entity, never a twin
+      const existing = domain ? findEntityByCanon(undefined, domain) : undefined;
+      if (existing?.research_note) {
+        total++; // already processed on a previous sweep — early-skip keeps the daily rotation polite & cheap
+        continue;
+      }
+      if (existing && existing.source === "osm" && domain) {
+        addEvent("lead", `dup domain ${domain}: enriching entity ${existing.id}`);
+      }
+      const entityId = existing?.id
+        ?? upsertEntity({
+            kind: "org",
+            name: poi.name,
+            domain_canon: domain ?? null,
+            phone_canon: poi.phone ? poi.phone.replace(/\D/g, "") : null,
+            city: poi.city,
+            source: "osm",
+            external_id: `${poi.osmType}/${poi.osmId}`,
+          });
+
+      let emailCanon: string | null = null;
+      if (existing?.email_canon) {
+        emailCanon = existing.email_canon; // merge-keep semantics
+      } else if (poi.website) {
+        const crawled = await crawlEmails(poi.website);
+        if (crawled) emailCanon = canonicalizeEmail(crawled);
+      }
+      const country = CITY_COUNTRY[poi.city.toLowerCase()] ?? null;
+
+      upsertEntity({
         kind: "org",
         name: poi.name,
         domain_canon: domain ?? null,
+        email_canon: emailCanon,
         phone_canon: poi.phone ? poi.phone.replace(/\D/g, "") : null,
         city: poi.city,
         source: "osm",
         external_id: `${poi.osmType}/${poi.osmId}`,
       });
 
-      let state = "new";
-      if (poi.website) {
-        const enriched = await enrichWebsite(poi.website);
-        let emailCanon: string | null = null;
-        if (enriched.email) emailCanon = canonicalizeEmail(enriched.email);
-        upsertEntity({
-          kind: "org",
-          name: poi.name,
-          domain_canon: domain ?? null,
-          email_canon: emailCanon,
-          city: poi.city,
-          source: "osm",
-          external_id: `${poi.osmType}/${poi.osmId}`,
-        });
-        state = emailCanon ? "contactable" : "enriched";
-      } else {
-        state = "enriched";
+      let mxOk = false;
+      if (emailCanon) {
+        mxOk = await hasMx(emailCanon.split("@")[1]);
+        if (!mxOk) {
+          addEvent("lead", `entity ${entityId}: MX fail ${emailCanon} → unusable`);
+          emailCanon = null;
+        }
       }
+      const note = await generateResearchNote({
+        name: poi.name,
+        city: poi.city,
+        category: poi.category ?? "accommodation",
+        website: poi.website ?? null,
+        hasEmail: !!emailCanon,
+        hasPhone: !!poi.phone,
+      });
+      setEntityResearch(
+        entityId,
+        poi.category ?? "accommodation",
+        country ?? "",
+        (note ?? "").slice(0, 400),
+        emailCanon ? "crawler" : "none",
+        !!emailCanon
+      );
 
+      const state = emailCanon ? "contactable" : poi.phone ? "enriched" : "new";
       upsertContact(entityId, "email", state);
       total++;
     }

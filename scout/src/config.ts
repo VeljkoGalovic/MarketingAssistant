@@ -110,10 +110,22 @@ export const config = {
     intervalDays: int("SCOUT_LEADFINDER_INTERVAL_DAYS", 7),
     cities: str(
       "SCOUT_LEADFINDER_CITIES",
-      "Lisbon, Barcelona, Amsterdam, Zagreb, Split"
+      "Lisbon, Barcelona, Valencia, Palma de Mallorca, Faro"
     ),
     maxPerRun: int("SCOUT_LEADFINDER_MAX_PER_RUN", 50),
+    /** Decision #14: stream, not burst — N new leads enter each morning recap. */
+    surfacedPerDay: int("SCOUT_LEADS_DAILY_SURFACED", 10),
   },
+  /** Honest, factual value proposition used verbatim in cold-email patches. */
+  outreachValueProp: str(
+    "SCOUT_OUTREACH_VALUE_PROP",
+    "LodgeTrack is a free-to-try property management platform built for small hotels, guest houses and vacation-rental hosts — calendars, cleaners, pricing and guest messaging in one place. Built by an owner, for owners."
+  ),
+  /** Early-adopter offer stated in every cold email (2026-11-16 user revision). */
+  outreachDiscount: str("SCOUT_OUTREACH_DISCOUNT", "20%"),
+  outreachPromoCode: str("SCOUT_OUTREACH_PROMO_CODE", "K5NJQXOQ"),
+  /** Optional unsubscribe landing page; when set, the legal note links to it. */
+  outreachUnsubscribeUrl: str("SCOUT_OUTREACH_UNSUBSCRIBE_URL", ""),
   killSwitch: bool("SCOUT_DISABLED"),
   dataDir: path.resolve(str("SCOUT_DATA_DIR", path.join(process.cwd(), "data"))),
 } as const;

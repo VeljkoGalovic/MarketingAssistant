@@ -9,4 +9,7 @@ dist/
 *.db-wal
 *.db-shm
 data/
+bin/
+# pre-git patch backups (legacy from before the repo went canonical)
+*.bak-*
 .DS_Store

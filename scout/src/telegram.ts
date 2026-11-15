@@ -39,9 +39,18 @@ import {
   canPostToSub,
   posterPaused,
 } from "./poster.ts";
-import { generateDraft, lintDraft } from "./drafts/provider.ts";
+import { generateDraft, lintDraft, generateColdEmail, CITY_LANGUAGE } from "./drafts/provider.ts";
 import { isKillOn } from "./health.ts";
 import { isQuietHour } from "./time.ts";
+import {
+  countEmailTouchesSince,
+  createEmailDraft,
+  emailDraftEntity,
+  getLead,
+  leadsReady,
+  setLeadStatus,
+  type LeadReady,
+} from "./db.ts";
 
 const API = () => `https://api.telegram.org/bot${config.telegram.botToken}`;
 
@@ -245,6 +254,7 @@ export async function sendRecap(): Promise<void> {
   for (const c of overnight) setCandidateStatus(c.id, "notified");
   addEvent("recap", `${n} overnight items surfaced`);
   setSetting("last_recap", String(Date.now()));
+  await maybeSendLeadRecap();
 }
 
 export async function sendDigest(): Promise<void> {
@@ -266,6 +276,180 @@ export async function maybeNudgeIfNoCapture(): Promise<void> {
     "📭 Nothing captured from the extension in the last 24 hours. A five-minute lap over your saved searches (secondary account) keeps the draft queue fed. This fires at most once a day."
   );
   addEvent("notify", "nudge sent (0 extension rows in 24h)");
+}
+
+// ---------------- lead lane (PLAN §14) ----------------
+
+/** Morning recap §2: up to surfacedPerDay funnel-ready leads, one ✍️ button each. */
+export async function maybeSendLeadRecap(): Promise<void> {
+  if (isKillOn() || isDryMode) return;
+  const limit = config.leadfinder.surfacedPerDay;
+  const leads = leadsReady(limit);
+  if (!leads.length) return;
+  const touched = countEmailTouchesSince(new Date().setHours(0, 0, 0, 0));
+  await sendMessage({
+    chat_id: chatTarget(),
+    text: [
+      `📬 <b>Leads ready</b> — ${leads.length}${leads.length >= limit ? ` (stream cap ${limit}/day)` : ""} MX-verified, uncontacted.`,
+      `First-touches today: ${touched}/${config.caps.emailFirstTouchDay}.`,
+      `<i>Tap ✍️ for a local-language draft · the one-tap mailto button lives on the dashboard.</i>`,
+    ].join("\n"),
+    parse_mode: "HTML",
+    disable_web_page_preview: true,
+    reply_markup: {
+      inline_keyboard: leads.map((l) => [
+        {
+          text: `✍️ ${l.name.slice(0, 28)}${l.city ? ` · ${l.city}` : ""}`,
+          callback_data: `pitch:${l.entity_id}`,
+        },
+      ]),
+    },
+  });
+  addEvent("lead", `recap surfaced ${leads.length} leads`);
+}
+
+/** Hot path for decision #14: user approves. Mailto stays on the dashboard; Telegram's
+ * mailto: URL buttons are rejected by Bot API (tested: 'BUTTON_URL_INVALID'). */
+async function sendLeadDraftCard(entityId: number): Promise<void> {
+  const lead = getLead(entityId);
+  if (!lead) {
+    await sendText("Lead not found — check /leads.");
+    return;
+  }
+  if (!lead.email) {
+    await sendText(`No verified email for ${escapeHtml(lead.name)} — it will re-enter the funnel after another sweep.`);
+    return;
+  }
+  const lang =
+    CITY_LANGUAGE[(lead.city ?? "").toLowerCase()] ?? { lang: "English", englishGloss: false };
+  const res = await generateColdEmail({
+    name: lead.name,
+    city: lead.city,
+    category: lead.category,
+    researchNote: lead.research_note,
+    website: lead.domain ? `https://${lead.domain}` : null,
+    contactEmail: lead.email,
+    language: lang.lang,
+    englishGloss: lang.englishGloss,
+  });
+  if (!res) {
+    await sendText("🛑 Draft generation failed (LLM down?) — try again in a minute.");
+    return;
+  }
+  // lint is EN-tuned; hits on the gloss/translated text are observability-only here
+  const hits = lintDraft(res.body);
+  if (hits.length) addEvent("draft", `email lint (entity ${entityId}): ${hits.slice(0, 4).join("; ")}`);
+  const draft = createEmailDraft(entityId, res.subject, res.body, res.provider);
+  await sendMessage({
+    chat_id: chatTarget(),
+    text: [
+      `🎯 <b>${escapeHtml(lead.name)}</b> — ${escapeHtml(lead.city ?? "?")}${lead.country ? `, ${escapeHtml(lead.country)}` : ""}`,
+      lead.research_note ? `🔎 ${escapeHtml(lead.research_note)}` : "",
+      "",
+      `To: <code>${escapeHtml(lead.email)}</code>`,
+      `<b>Subject:</b> ${escapeHtml(draft.subject ?? "")}`,
+      "",
+      escapeHtml(draft.body),
+      "",
+      `<i>Draft #${draft.id} · copy → your own mail app (LodgeTrack never auto-sends) · status buttons below.</i>`,
+    ]
+      .filter((s) => s !== undefined)
+      .join("\n"),
+    parse_mode: "HTML",
+    disable_web_page_preview: true,
+    reply_markup: {
+      inline_keyboard: [
+        [
+          { text: "✅ Sent", callback_data: `lead:${entityId}:sent` },
+          { text: "↩️ Replied", callback_data: `lead:${entityId}:responded` },
+          { text: "💀 Bounced", callback_data: `lead:${entityId}:bounced` },
+        ],
+        [
+          { text: "🚫 Not int.", callback_data: `lead:${entityId}:not_interested` },
+          { text: "🎯 Bought", callback_data: `lead:${entityId}:bought` },
+          { text: "🔁 New draft", callback_data: `pitch:${entityId}` },
+        ],
+      ],
+    },
+  });
+  addEvent("draft", `email draft ${draft.id} for entity ${entityId} (${res.provider})`);
+}
+
+/** /lead <id> — detail card without burning an LLM call; Pitch only on tap. */
+async function sendLeadDetail(entityId: number): Promise<void> {
+  const lead = getLead(entityId);
+  if (!lead) {
+    await sendText("Lead not found.");
+    return;
+  }
+  await sendMessage({
+    chat_id: chatTarget(),
+    text: [
+      `🎯 <b>#${entityId} ${escapeHtml(lead.name)}</b> — ${escapeHtml(lead.city ?? "?")}${lead.country ? `, ${escapeHtml(lead.country)}` : ""}`,
+      `type: ${escapeHtml(lead.category ?? "accommodation")} · funnel: ${lead.state ?? "new"}`,
+      lead.research_note ? `🔎 ${escapeHtml(lead.research_note)}` : "",
+      lead.email ? `To: <code>${escapeHtml(lead.email)}</code>` : "no verified email yet",
+      lead.domain ? `site: ${escapeHtml(lead.domain)}` : "",
+    ]
+      .filter(Boolean)
+      .join("\n"),
+    parse_mode: "HTML",
+    disable_web_page_preview: true,
+    reply_markup: {
+      inline_keyboard: [
+        [{ text: "✍️ Pitch", callback_data: `pitch:${entityId}` }],
+        [
+          { text: "✅ Sent", callback_data: `lead:${entityId}:sent` },
+          { text: "🚫 Not int.", callback_data: `lead:${entityId}:not_interested` },
+          { text: "🎯 Bought", callback_data: `lead:${entityId}:bought` },
+        ],
+      ],
+    },
+  });
+}
+
+async function listLeads(): Promise<void> {
+  const leads = leadsReady(15);
+  if (!leads.length) {
+    await sendText("No funnel-ready leads right now. The city sweep refills daily.");
+    return;
+  }
+  await sendText(
+    [
+      `<b>📬 Funnel-ready</b> (newest first):`,
+      ...leads.map(
+        (l) => `#${l.entity_id} ${escapeHtml(l.name)} · ${escapeHtml(l.city ?? "?")}`
+      ),
+      `<i>Pitch a lead: ✍️ in recap, or /lead &lt;id&gt;. Update status: /sent /bounced /responded /bought /notinterested &lt;id&gt;</i>`,
+    ].join("\n")
+  );
+}
+
+const LEAD_STATE_COMMANDS: Record<string, "sent" | "responded" | "bounced" | "not_interested" | "bought" | "skip"> = {
+  "/sent": "sent",
+  "/bounced": "bounced",
+  "/responded": "responded",
+  "/bought": "bought",
+  "/notinterested": "not_interested",
+  "/not_interested": "not_interested",
+  "/skip": "skip",
+};
+
+async function handleLeadStateCommand(cmd: string, rawId: string): Promise<void> {
+  const id = Number(rawId.trim());
+  if (!Number.isFinite(id) || id <= 0) {
+    await sendText(`Usage: ${cmd} <lead id>`);
+    return;
+  }
+  setLeadStatus(id, LEAD_STATE_COMMANDS[cmd], "telegram command");
+  const capNote =
+    LEAD_STATE_COMMANDS[cmd] === "sent" &&
+    countEmailTouchesSince(new Date().setHours(0, 0, 0, 0)) > config.caps.emailFirstTouchDay
+      ? ` ⚠️ daily first-touch cap (${config.caps.emailFirstTouchDay}) exceeded`
+      : "";
+  await sendText(
+    `📌 Lead #${id} → ${LEAD_STATE_COMMANDS[cmd]}${capNote}`
+  );
 }
 
 function lastRunBoundary(key: string, hour: number): number {
@@ -355,6 +539,15 @@ async function handleUpdate(u: TgUpdate): Promise<void> {
         ? ["📬 <b>Queue</b>, oldest first:", ...fresh.slice(0, 15).map((c) => `- [${escapeHtml(c.title)}](${escapeHtml(c.url)})`)].join("\n\n")
         : "Queue is empty."
     );
+  } else if (text.startsWith("/leads")) {
+    await listLeads();
+  } else if (text.startsWith("/lead ")) {
+    const id = Number(text.slice(6).trim());
+    if (Number.isFinite(id) && id > 0) await sendLeadDetail(id);
+    else await sendText("Usage: /lead <id>");
+  } else if (LEAD_STATE_COMMANDS[text.split(" ")[0]]) {
+    const [cmd, ...rest] = text.split(" ");
+    await handleLeadStateCommand(cmd, rest.join(" "));
   } else if (text.startsWith("/watch add ")) {
     const [kind, ...rest] = text.slice(11).split(" ");
     addWatchItem(kind, rest.join(" "));
@@ -433,6 +626,30 @@ async function handleCallback(cq: TgCallback): Promise<void> {
       addEvent("skip", `draft ${arg} discarded`);
       await tg("answerCallbackQuery", { callback_query_id: cq.id, text: "Discarded" });
       if (msgId) await editTo(msgId, "✖️ Draft discarded.");
+    } else if (action === "pitch") {
+      await tg("answerCallbackQuery", { callback_query_id: cq.id, text: "Drafting pitch… (10–20s)" });
+      await sendLeadDraftCard(Number(arg));
+    } else if (action === "lead") {
+      // callback_data = lead:<entityId>:<state>
+      const parts = (cq.data ?? "").split(":");
+      const entityId = Number(parts[1]);
+      const state = parts[2];
+      const valid = ["sent", "responded", "bounced", "not_interested", "bought", "skip"];
+      if (Number.isFinite(entityId) && valid.includes(state)) {
+        setLeadStatus(entityId, state as "sent", "telegram button");
+        const capNote =
+          state === "sent" &&
+          countEmailTouchesSince(new Date().setHours(0, 0, 0, 0)) > config.caps.emailFirstTouchDay
+            ? ` · ⚠️ over daily cap`
+            : "";
+        await tg("answerCallbackQuery", {
+          callback_query_id: cq.id,
+          text: `#${entityId} → ${state}${capNote}`,
+          show_alert: false,
+        });
+      } else {
+        await tg("answerCallbackQuery", { callback_query_id: cq.id, text: "Unknown status" });
+      }
     }
   } catch (e) {
     addEvent("error", `callback ${cq.data}: ${String(e)}`);

@@ -33,7 +33,12 @@ import {
 import { approveAndPrepare, postDraft, regenerateDraft, updateDraftBody, posterPaused, setPosterPaused } from "../poster.ts";
 import { canaryFor, isKillOn, type CanaryStatus } from "../health.ts";
 import { listWatchItems, addWatchItem, removeWatchItem } from "../db.ts";
-import { lintDraft } from "../drafts/provider.ts";
+import { generateColdEmail, CITY_LANGUAGE, lintDraft } from "../drafts/provider.ts";
+import { countEmailTouchesSince, createEmailDraft, getLead, leadsReady, setLeadStatus } from "../db.ts";
+
+/** Funnel states the dashboard's mark-buttons can write. */
+const LEAD_STATES = ["sent", "responded", "bounced", "not_interested", "bought", "skip", "contactable"] as const;
+type LeadState = (typeof LEAD_STATES)[number];
 
 const sessions = new Set<string>();
 const COOKIE = "scout_dash";
@@ -180,19 +185,37 @@ function draftsPage(rows: Array<Record<string, unknown>>): string {
 }
 
 function leadsPage(rows: Array<Record<string, unknown>>): string {
-  return `<div class="card"><h3 style="margin:0 0 10px">Leads (${rows.length})</h3>
+  const markBtn = (id: unknown, state: string, label: string, cls = "") =>
+    `<form class="inline" method="post" action="/lead/state"><input type="hidden" name="entity" value="${id}"><input type="hidden" name="state" value="${state}"><button ${cls}>${label}</button></form>`;
+  return `<div class="card"><h3 style="margin:0 0 10px">Lead funnel (${rows.length})</h3>
   <a href="/leads.csv"><button>⬇️ Export CSV</button></a>
-  <table style="margin-top:10px"><tr><th>Name</th><th>City</th><th>Email</th><th>Domain</th><th>Phone</th><th>State</th><th></th></tr>
+  <table style="margin-top:10px"><tr><th>ID</th><th>Name</th><th>City</th><th>Email</th><th>Research note</th><th>State</th><th>Actions</th></tr>
   ${rows
-    .map(
-      (l) => `<tr><td>${esc(String(l.name))}</td><td class="muted">${esc(String(l.city ?? ""))}</td>
-      <td>${esc(String(l.email ?? ""))}</td><td class="muted">${esc(String(l.domain ?? ""))}</td>
-      <td class="muted">${esc(String(l.phone ?? ""))}</td>
-      <td><span class="tag">${esc(String(l.state ?? "org-only"))}</span></td>
-      <td><form class="inline" method="post" action="/lead/dnc"><input type="hidden" name="entity" value="${l.entity_id}"><button class="danger">DNC</button></form></td></tr>`
-    )
+    .map((l) => {
+      const validated = Number(l.email_validated ?? 0) === 1;
+      const contacted = Number(l.first_contacted_at ?? 0) > 0;
+      const dnc = String(l.state ?? "") === "do_not_contact";
+      const readyStates = ["new", "enriched", "contactable"];
+      const pitchable = !dnc && !contacted && readyStates.includes(String(l.state ?? "new"));
+      return `<tr><td class="muted">#${l.entity_id}</td>
+      <td>${esc(String(l.name))}${l.category ? `<div class="muted">${esc(String(l.category))}</div>` : ""}</td>
+      <td class="muted">${esc(String(l.city ?? ""))}${l.country ? `, ${esc(String(l.country))}` : ""}</td>
+      <td>${l.email ? esc(String(l.email)) : ""}${validated ? ` <span class="tag badge-green">MX ✓</span>` : l.email ? ` <span class="tag badge-red">mx fail</span>` : ""}</td>
+      <td class="muted" style="max-width:260px">${esc(String(l.research_note ?? "").slice(0, 140))}</td>
+      <td><span class="tag ${dnc ? "badge-red" : contacted ? "badge-yellow" : ""}">${esc(String(l.state ?? "—"))}</span></td>
+      <td>
+        ${l.email ? `<a href="mailto:${encodeURIComponent(String(l.email))}?subject=${encodeURIComponent(`LodgeTrack — partnership`)}"><button>✉️ Mail</button></a>` : ""}
+        ${pitchable ? `<form class="inline" method="post" action="/lead/pitch"><input type="hidden" name="entity" value="${l.entity_id}"><button class="primary">✍️ Pitch</button></form>` : ""}
+        ${markBtn(l.entity_id, "sent", "✅ Sent")}
+        ${markBtn(l.entity_id, "responded", "↩️ Replied")}
+        ${markBtn(l.entity_id, "bought", "🎯 Bought")}
+        ${markBtn(l.entity_id, "not_interested", "🚫")}
+        ${markBtn(l.entity_id, "bounced", "💀")}
+        ${dnc ? "" : `<form class="inline" method="post" action="/lead/dnc"><input type="hidden" name="entity" value="${l.entity_id}"><button class="danger">DNC</button></form>`}
+      </td></tr>`;
+    })
     .join("")}
-  ${rows.length ? "" : "<tr><td colspan=7 class='muted'>Lead-finder runs weekly once SCOUT_LEADFINDER_ENABLED=1.</td></tr>"}
+  ${rows.length ? "" : "<tr><td colspan=7 class='muted'>No leads yet. The daily city sweep refills the funnel.</td></tr>"}
   </table></div>`;
 }
 
@@ -442,6 +465,47 @@ export function startDashboardServer(): void {
             redirect("/leads", "Marked do-not-contact (hard block)");
             return;
           }
+          case "/lead/state": {
+            const id = Number(body.entity);
+            const state = String(body.state ?? "");
+            if (!Number.isFinite(id) || !LEAD_STATES.includes(state as LeadState)) {
+              redirect("/leads", "Bad lead status write");
+              return;
+            }
+            setLeadStatus(id, state as "sent", "dashboard");
+            redirect(
+              "/leads",
+              state === "sent" && countEmailTouchesSince(new Date().setHours(0, 0, 0, 0)) > config.caps.emailFirstTouchDay
+                ? `Lead #${id} → ${state} (⚠️ over today's first-touch cap)`
+                : `Lead #${id} → ${state}`
+            );
+            return;
+          }
+          case "/lead/pitch": {
+            const lead = getLead(Number(body.entity));
+            if (!lead?.email) {
+              redirect("/leads", "No verified email on that lead yet");
+              return;
+            }
+            const lang = CITY_LANGUAGE[(lead.city ?? "").toLowerCase()] ?? { lang: "English", englishGloss: false };
+            const res = await generateColdEmail({
+              name: lead.name,
+              city: lead.city,
+              category: lead.category,
+              researchNote: lead.research_note,
+              website: lead.domain ? `https://${lead.domain}` : null,
+              contactEmail: lead.email,
+              language: lang.lang,
+              englishGloss: lang.englishGloss,
+            });
+            if (!res) {
+              redirect("/leads", "⚠ Draft generation failed — try again");
+              return;
+            }
+            const d = createEmailDraft(lead.entity_id, res.subject, res.body, res.provider);
+            redirect("/drafts", `Draft #${d.id} ready → ✉️ mailto button on its row`);
+            return;
+          }
           case "/action/watch": {
             addWatchItem(body.kind ?? "subreddit", body.value ?? "");
             redirect("/settings", "Watchlist updated");
@@ -504,14 +568,22 @@ export function startDashboardServer(): void {
       const { db } = await import("../db.ts");
       const rows = db
         .prepare(
-          `SELECT e.id AS entity_id, e.name, e.city, e.email_canon AS email, e.domain_canon AS domain,
-                  e.phone_canon AS phone, MAX(CASE WHEN c.state IS NOT NULL THEN c.state END) AS state
-           FROM entities e LEFT JOIN contacts c ON c.entity_id = e.id
+          `SELECT e.id AS entity_id, e.name, e.city, e.country, e.category, e.research_note,
+                  e.email_canon AS email, e.email_validated, e.first_contacted_at,
+                  e.domain_canon AS domain, e.phone_canon AS phone,
+                  c.state AS state
+           FROM entities e LEFT JOIN contacts c ON c.entity_id = e.id AND c.channel = 'email'
+           WHERE e.email_canon IS NOT NULL OR c.state IS NOT NULL
            GROUP BY e.id ORDER BY e.id DESC LIMIT 200`
         )
         .all() as Array<Record<string, unknown>>;
+      const ready = leadsReady(config.leadfinder.surfacedPerDay).length;
+      const touched = countEmailTouchesSince(new Date().setHours(0, 0, 0, 0));
+      const head = `<div class="card" style="padding:10px 16px">
+        Pipeline status: <b>${ready}</b> funnel-ready · first-touches today <b>${touched}/${config.caps.emailFirstTouchDay}</b>
+        <span class="muted">· one city sweeps per day (cap ${config.leadfinder.maxPerRun}/run)</span></div>`;
       res.writeHead(200, { "Content-Type": "text/html" });
-      res.end(page("Leads", navActions(), leadsPage(rows), esc(msg)));
+      res.end(page("Leads", navActions(), head + leadsPage(rows), esc(msg)));
       return;
     }
     if (path === "/leads.csv") {
