@@ -108,6 +108,7 @@ ensureColumn("entities", "email_source", "email_source TEXT");  // osm | crawler
 ensureColumn("entities", "email_validated", "email_validated INTEGER DEFAULT 0");
 ensureColumn("entities", "first_contacted_at", "first_contacted_at INTEGER");
 ensureColumn("entities", "last_contacted_at", "last_contacted_at INTEGER");
+ensureColumn("entities", "last_surfaced_at", "last_surfaced_at INTEGER"); // recap round-robin cursor
 ensureColumn("drafts", "subject", "subject TEXT");              // cold emails carry subject
 db.exec("CREATE INDEX IF NOT EXISTS ix_entities_email_valid ON entities(email_canon, email_validated);");
 
@@ -445,6 +446,13 @@ export function findEntityByCanon(
   return undefined;
 }
 
+/** Find an OSM-sourced entity by its external id ("osmType/osmId"). */
+export function findEntityByOsmId(externalId: string): Entity | undefined {
+  return db
+    .prepare("SELECT * FROM entities WHERE source = 'osm' AND external_id = ?")
+    .get(externalId) as Entity | undefined;
+}
+
 export interface Contact {
   id: number;
   entity_id: number;
@@ -489,7 +497,9 @@ export interface LeadReady {
   created_at: number;
 }
 
-/** Leads surfaced in the morning recap: MX-validated, not contacted, suppression-aware. */
+/** Leads surfaced in the morning recap: MX-validated, not contacted, suppression-aware.
+ *  Stream fairness (fix 2026-11-16): order by last_surfaced_at ASC so the recap rotates
+ *  through the WHOLE ready pool instead of pinning on whichever city was swept last. */
 export function leadsReady(limit: number): LeadReady[] {
   return db
     .prepare(
@@ -501,9 +511,17 @@ export function leadsReady(limit: number): LeadReady[] {
          AND EXISTS (SELECT 1 FROM contacts c WHERE c.entity_id = e.id AND c.channel='email' AND c.state IN ${LEAD_READY_STATES})
          AND NOT EXISTS (SELECT 1 FROM contacts c2 WHERE c2.entity_id = e.id AND c2.channel='email' AND
               c2.state IN ('sent','responded','bounced','not_interested','declined','do_not_contact'))
-       ORDER BY e.created_at DESC LIMIT ?`
+       ORDER BY COALESCE(e.last_surfaced_at, 0) ASC, e.created_at DESC LIMIT ?`
     )
     .all(now() - 180 * 24 * 3600_000, limit) as LeadReady[];
+}
+
+/** Stamp leads as surfaced by the recap (drives the round-robin cursor above). */
+export function markLeadsSurfaced(entityIds: number[]): void {
+  if (!entityIds.length) return;
+  const stmt = db.prepare("UPDATE entities SET last_surfaced_at = ? WHERE id = ?");
+  const ts = now();
+  for (const id of entityIds) stmt.run(ts, id);
 }
 
 export interface LeadRow {

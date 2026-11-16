@@ -65,7 +65,13 @@ function todayKey(): string {
 function lastRunDay(key: string): string {
   const raw = getSetting(key);
   if (!raw) return "";
-  return new Date(Number(raw)).toISOString().slice(0, 10);
+  // historical formats: timestamps (last_recap) and ISO date strings (last_digest)
+  const ms = /^\d+$/.test(raw) ? Number(raw) : Date.parse(raw);
+  if (!Number.isFinite(ms)) {
+    addEvent("error", `lastRunDay ${key}: unparsable value "${raw}"`);
+    return "";
+  }
+  return new Date(ms).toISOString().slice(0, 10);
 }
 
 // ---- background maintenance ----

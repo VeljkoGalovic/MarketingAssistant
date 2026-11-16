@@ -5,6 +5,7 @@ import {
   canonicalizeDomain,
   db,
   findEntityByCanon,
+  findEntityByOsmId,
   isContactBlocked,
   setEntityResearch,
   upsertContact,
@@ -240,12 +241,15 @@ export async function sweepCities(onlyCity?: string): Promise<void> {
       const domain = poi.website ? safeDomain(poi.website) : undefined;
       if (!poi.website && !poi.phone) continue;
 
-      // dedupe merge: same domain already known → enrich THAT entity, never a twin
-      const existing = domain ? findEntityByCanon(undefined, domain) : undefined;
-      if (existing?.research_note) {
-        total++; // already processed on a previous sweep — early-skip keeps the daily rotation polite & cheap
-        continue;
-      }
+      // dedupe: identity is (source, external_id) first, then domain — the same
+      // business listed in two cities merges into ONE entity, never a twin
+      const extId = `${poi.osmType}/${poi.osmId}`;
+      const existing = findEntityByOsmId(extId)
+        ?? (domain ? findEntityByCanon(undefined, domain) : undefined);
+      // already processed on a previous sweep — free skip. Fix 2026-11-16: dupes
+      // must NOT burn the maxPerRun budget, otherwise a re-sweep always re-hits
+      // the same first-N POIs and the long tail of the city is never reached.
+      if (existing?.research_note) continue;
       if (existing && existing.source === "osm" && domain) {
         addEvent("lead", `dup domain ${domain}: enriching entity ${existing.id}`);
       }

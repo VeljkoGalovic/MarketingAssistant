@@ -23,6 +23,7 @@ import {
   listWatchItems,
   addWatchItem,
   removeWatchItem,
+  markLeadsSurfaced,
   setCandidateStatus,
   setDraftMessageId,
   setSetting,
@@ -286,6 +287,7 @@ export async function maybeSendLeadRecap(): Promise<void> {
   const limit = config.leadfinder.surfacedPerDay;
   const leads = leadsReady(limit);
   if (!leads.length) return;
+  markLeadsSurfaced(leads.map((l) => l.entity_id)); // rotate the recap cursor past this batch
   const touched = countEmailTouchesSince(new Date().setHours(0, 0, 0, 0));
   await sendMessage({
     chat_id: chatTarget(),
