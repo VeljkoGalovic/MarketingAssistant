@@ -2,8 +2,10 @@ import { config, canPostReddit } from "./config.ts";
 import {
   addEvent,
   db,
+  countEmailTouchesSince,
   getBannedSubreddits,
   getSetting,
+  leadsReady,
   setSetting,
   stats,
 } from "./db.ts";
@@ -153,7 +155,6 @@ export function heartbeatText(): string {
   const canaries = platforms
     .map((p) => `${p}=${canaryFor(p)}`)
     .join(" · ");
-  const { countEmailTouchesSince, leadsReady } = require("./db.ts");
   const touched = countEmailTouchesSince(new Date().setHours(0, 0, 0, 0));
   const ready = leadsReady(999).length;
   return [

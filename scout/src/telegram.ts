@@ -77,15 +77,47 @@ function escapeHtml(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
-async function tg<T>(method: string, payload: unknown): Promise<T> {
-  const res = await fetch(`${API()}/${method}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  });
-  const j = (await res.json()) as { ok: boolean; result?: T; description?: string };
-  if (!j.ok) throw new Error(`telegram ${method}: ${j.description ?? res.status}`);
-  return j.result as T;
+async function tg<T>(
+  method: string,
+  payload: unknown,
+  opts: { timeoutMs?: number; retries?: number } = {}
+): Promise<T> {
+  const timeoutMs = opts.timeoutMs ?? 20_000;
+  const retries = opts.retries ?? 1;
+  let lastErr: unknown;
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    let res: Response;
+    try {
+      res = await fetch(`${API()}/${method}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+    } catch (e) {
+      // Network flap / timeout: retry once before surfacing.
+      lastErr = e;
+      if (attempt < retries) {
+        await new Promise((r) => setTimeout(r, 700 * (attempt + 1)));
+        continue;
+      }
+      throw e;
+    }
+    let j: { ok: boolean; result?: T; description?: string };
+    try {
+      j = (await res.json()) as typeof j;
+    } catch (e) {
+      lastErr = e;
+      if (attempt < retries) {
+        await new Promise((r) => setTimeout(r, 700 * (attempt + 1)));
+        continue;
+      }
+      throw e;
+    }
+    if (!j.ok) throw new Error(`telegram ${method}: ${j.description ?? res.status}`);
+    return j.result as T;
+  }
+  throw lastErr ?? new Error(`telegram ${method}: request failed`);
 }
 
 // ---------------- text builders ----------------
@@ -629,7 +661,12 @@ async function handleCallback(cq: TgCallback): Promise<void> {
       await tg("answerCallbackQuery", { callback_query_id: cq.id, text: "Discarded" });
       if (msgId) await editTo(msgId, "✖️ Draft discarded.");
     } else if (action === "pitch") {
-      await tg("answerCallbackQuery", { callback_query_id: cq.id, text: "Drafting pitch… (10–20s)" });
+      // The "Drafting…" toast is cosmetic: a Telegram flap here must never abort
+      // the pitch before the LLM call (observed 2026-11-17: callback pitch:1050).
+      await tg("answerCallbackQuery", {
+        callback_query_id: cq.id,
+        text: "Drafting pitch… (10–20s)",
+      }).catch(() => {});
       await sendLeadDraftCard(Number(arg));
     } else if (action === "lead") {
       // callback_data = lead:<entityId>:<state>
@@ -765,11 +802,15 @@ export async function runTelegramLoop(): Promise<void> {
   let offset = 0;
   for (;;) {
     try {
-      const updates = await tg<TgUpdate[]>("getUpdates", {
-        offset: offset + 1,
-        timeout: 30,
-        allowed_updates: ["message", "callback_query"],
-      });
+      const updates = await tg<TgUpdate[]>(
+        "getUpdates",
+        {
+          offset: offset + 1,
+          timeout: 30,
+          allowed_updates: ["message", "callback_query"],
+        },
+        { timeoutMs: 40_000, retries: 0 }
+      );
       for (const u of updates) {
         offset = Math.max(offset, u.update_id);
         await handleUpdate(u).catch((e) => addEvent("error", `handleUpdate: ${String(e)}`));

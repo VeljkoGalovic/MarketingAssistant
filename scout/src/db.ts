@@ -274,6 +274,45 @@ export function emailDraftEntity(draftId: number): number | null {
   return v ? Number(v) : null;
 }
 
+/** Recipient inbox for an email draft (via its entity link). */
+export function emailDraftRecipient(draftId: number): string | null {
+  const entityId = emailDraftEntity(draftId);
+  if (!entityId) return null;
+  const row = db.prepare("SELECT email_canon FROM entities WHERE id = ?").get(entityId) as
+    | { email_canon: string | null }
+    | undefined;
+  return row?.email_canon ?? null;
+}
+
+/** Newest email draft linked to a lead — powers the dashboard's mailto assist. */
+export function latestEmailDraftForEntity(entityId: number): Draft | undefined {
+  return db
+    .prepare(
+      `SELECT d.* FROM drafts d
+       JOIN settings s ON s.key = 'draft:' || d.id || ':entity'
+       WHERE s.value = ? AND d.channel = 'email' AND d.status != 'rejected'
+       ORDER BY d.id DESC LIMIT 1`
+    )
+    .get(String(entityId)) as Draft | undefined;
+}
+
+/** Cascade a lead's "sent" confirmation onto its outstanding email drafts.
+ *  Fixes the 2026-11-18 bug where drafts stayed `drafted` forever because only
+ *  contacts/entities were updated by the Sent buttons. Returns drafts changed. */
+export function markEntityDraftsSent(entityId: number): number {
+  const rows = db
+    .prepare(
+      `SELECT d.id FROM drafts d
+       JOIN settings s ON s.key = 'draft:' || d.id || ':entity'
+       WHERE s.value = ? AND d.channel = 'email'
+         AND d.status IN ('drafted','edited','approved')`
+    )
+    .all(String(entityId)) as Array<{ id: number }>;
+  for (const row of rows) setDraftStatus(row.id, "sent");
+  if (rows.length) addEvent("draft", `entity ${entityId}: ${rows.length} draft(s) marked sent`);
+  return rows.length;
+}
+
 export function getDraftById(id: number): Draft | undefined {
   return db.prepare("SELECT * FROM drafts WHERE id = ?").get(id) as Draft | undefined;
 }
@@ -561,6 +600,9 @@ export function setLeadStatus(
     db.prepare(
       "UPDATE entities SET first_contacted_at = COALESCE(first_contacted_at, ?), last_contacted_at = ? WHERE id = ?"
     ).run(ts, ts, entityId);
+    // The "Sent" confirmation also closes the linked email draft(s); otherwise
+    // they stay `drafted` and later get expired even though the mail went out.
+    markEntityDraftsSent(entityId);
   }
   addEvent("lead", `entity ${entityId} → ${state}`);
 }

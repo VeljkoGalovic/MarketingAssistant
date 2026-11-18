@@ -34,7 +34,7 @@ import { approveAndPrepare, postDraft, regenerateDraft, updateDraftBody, posterP
 import { canaryFor, isKillOn, type CanaryStatus } from "../health.ts";
 import { listWatchItems, addWatchItem, removeWatchItem } from "../db.ts";
 import { generateColdEmail, CITY_LANGUAGE, lintDraft } from "../drafts/provider.ts";
-import { countEmailTouchesSince, createEmailDraft, getLead, leadsReady, setLeadStatus } from "../db.ts";
+import { countEmailTouchesSince, createEmailDraft, emailDraftEntity, emailDraftRecipient, getLead, latestEmailDraftForEntity, leadsReady, setLeadStatus } from "../db.ts";
 
 /** Funnel states the dashboard's mark-buttons can write. */
 const LEAD_STATES = ["sent", "responded", "bounced", "not_interested", "bought", "skip", "contactable"] as const;
@@ -141,6 +141,16 @@ function queuePage(rows: Candidate[]): string {
   </table></div>`;
 }
 
+function localEmailBody(body: string): string {
+  // Stored email bodies are "<local language>\n\n----\n<English gloss>".
+  // Only the local-language part belongs in the outgoing mail.
+  return body.split("\n\n----\n")[0].trim();
+}
+
+function mailtoHref(to: string, subject: string | null, body: string): string {
+  return `mailto:${encodeURIComponent(to)}?subject=${encodeURIComponent(subject ?? "")}&body=${encodeURIComponent(localEmailBody(body))}`;
+}
+
 function draftsPage(rows: Array<Record<string, unknown>>): string {
   return `<div class="card"><h3 style="margin:0 0 10px">Drafts (${rows.length}) — 48h expiry</h3>
   <script>
@@ -171,6 +181,8 @@ function draftsPage(rows: Array<Record<string, unknown>>): string {
             ? `<form class="inline" method="post" action="/draft/post"><input type="hidden" name="id" value="${d.id}"><input type="hidden" name="src" value="drafts"><button class="primary">📲 Post</button></form>`
             : `<span class="tag">📋 copy → paste as your comment (Plan B)</span>`)
           : ""}
+        ${d.channel === "email" && d.to_email ? `<a href="${esc(mailtoHref(String(d.to_email), d.subject ? String(d.subject) : null, String(d.body)))}"><button>📨 Open mail app</button></a>` : ""}
+        ${d.channel === "email" && d.status !== "sent" && d.status !== "rejected" ? `<form class="inline" method="post" action="/draft/sent"><input type="hidden" name="id" value="${d.id}"><input type="hidden" name="src" value="drafts"><button class="primary">✅ Sent</button></form>` : ""}
         ${d.status !== "sent" && d.status !== "rejected" ? `<form class="inline" method="post" action="/draft/discard"><input type="hidden" name="id" value="${d.id}"><input type="hidden" name="src" value="drafts"><button>✖️</button></form>` : ""}
       </td></tr>
       <tr><td colspan="7">
@@ -197,6 +209,7 @@ function leadsPage(rows: Array<Record<string, unknown>>): string {
       const dnc = String(l.state ?? "") === "do_not_contact";
       const readyStates = ["new", "enriched", "contactable"];
       const pitchable = !dnc && !contacted && readyStates.includes(String(l.state ?? "new"));
+      const draft = latestEmailDraftForEntity(Number(l.entity_id));
       return `<tr><td class="muted">#${l.entity_id}</td>
       <td>${esc(String(l.name))}${l.category ? `<div class="muted">${esc(String(l.category))}</div>` : ""}</td>
       <td class="muted">${esc(String(l.city ?? ""))}${l.country ? `, ${esc(String(l.country))}` : ""}</td>
@@ -204,7 +217,7 @@ function leadsPage(rows: Array<Record<string, unknown>>): string {
       <td class="muted" style="max-width:260px">${esc(String(l.research_note ?? "").slice(0, 140))}</td>
       <td><span class="tag ${dnc ? "badge-red" : contacted ? "badge-yellow" : ""}">${esc(String(l.state ?? "—"))}</span></td>
       <td>
-        ${l.email ? `<a href="mailto:${encodeURIComponent(String(l.email))}?subject=${encodeURIComponent(`LodgeTrack — partnership`)}"><button>✉️ Mail</button></a>` : ""}
+        ${l.email ? `<a href="${esc(mailtoHref(String(l.email), draft?.subject ?? "LodgeTrack — partnership", draft?.body ?? ""))}"><button>${draft ? "✉️ Mail draft" : "✉️ Mail"}</button></a>` : ""}
         ${pitchable ? `<form class="inline" method="post" action="/lead/pitch"><input type="hidden" name="entity" value="${l.entity_id}"><button class="primary">✍️ Pitch</button></form>` : ""}
         ${markBtn(l.entity_id, "sent", "✅ Sent")}
         ${markBtn(l.entity_id, "responded", "↩️ Replied")}
@@ -454,6 +467,19 @@ export function startDashboardServer(): void {
             redirect(back, "Draft discarded");
             return;
           }
+          case "/draft/sent": {
+            const id = Number(body.id);
+            const d = getDraftById(id);
+            if (!d) {
+              redirect(back, "Draft missing");
+              return;
+            }
+            setDraftStatus(id, "sent");
+            const entityId = d.channel === "email" ? emailDraftEntity(id) : null;
+            if (entityId) setLeadStatus(entityId, "sent", "dashboard draft");
+            redirect(back, `Draft #${id} marked sent${entityId ? ` · lead #${entityId} → sent` : ""}`);
+            return;
+          }
           case "/draft/edit": {
             updateDraftBody(Number(body.id), (body.body ?? "").slice(0, 4000), "dashboard-edit");
             redirect(back, "Draft saved");
@@ -556,9 +582,12 @@ export function startDashboardServer(): void {
     }
     if (path === "/drafts") {
       const { db } = await import("../db.ts");
-      const rows = db
-        .prepare("SELECT * FROM drafts ORDER BY id DESC LIMIT 50")
-        .all() as Array<Record<string, unknown>>;
+      const rows = (
+        db.prepare("SELECT * FROM drafts ORDER BY id DESC LIMIT 50").all() as Array<Record<string, unknown>>
+      ).map((d) => ({
+        ...d,
+        to_email: d.channel === "email" ? emailDraftRecipient(Number(d.id)) : null,
+      }));
       res.writeHead(200, { "Content-Type": "text/html" });
       res.end(page("Drafts", navActions(),
         `<div class="muted card" style="padding:8px 16px">Reddit posts flow automatically after <b>📲 Post</b> (cap + guards apply). LinkedIn/X/FB drafts are copy-paste — the Telegram thread shows the same text.</div>` + draftsPage(rows), esc(msg)));

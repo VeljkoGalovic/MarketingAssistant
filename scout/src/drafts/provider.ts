@@ -145,8 +145,32 @@ export interface ColdEmailResult {
   provider: string;
 }
 
+/** Parse either the 2026-11-15 scaffold format or the legacy Subject:/-separator shape. */
+function parseColdEmailResult(raw: string): ColdEmailResult | null {
+  const parsed = parseColdEmailOutput(sanitizeEmailDraft(raw));
+  if (parsed && parsed.subject && parsed.localBody) {
+    return {
+      subject: parsed.subject,
+      body: parsed.gloss ? `${parsed.localBody}\n\n----\n${parsed.gloss}` : parsed.localBody,
+      provider: "",
+    };
+  }
+  // legacy fallback (pre-2026-11-15 shape: "Subject:" line + "----" gloss)
+  const text = sanitizeDraft(raw);
+  const subjectM = text.match(/subject\s*:\s*(.+)/i);
+  const subject = subjectM?.[1]?.trim() ?? "";
+  const splitAt = text.indexOf("----");
+  const bodyPart = (splitAt > 0 ? text.slice(0, splitAt) : text).replace(/^subject\s*:.+\n+/i, "").trim();
+  const englishPart = splitAt > 0 ? text.slice(splitAt + 4).trim() : "";
+  if (!subject || !bodyPart) return null;
+  return {
+    subject,
+    body: englishPart ? `${bodyPart}\n\n----\n${englishPart}` : bodyPart,
+    provider: "",
+  };
+}
+
 export async function generateColdEmail(req: ColdEmailRequest): Promise<ColdEmailResult | null> {
-  if (!config.llm.google.key) return null;
   const kb = matchKb(`${req.name} ${req.category ?? ""} ${req.researchNote ?? ""}`);
   const material = [
     `Business: ${req.name}`,
@@ -160,42 +184,67 @@ export async function generateColdEmail(req: ColdEmailRequest): Promise<ColdEmai
   ].join("\n");
   const system = COLD_EMAIL_VOICE(req.language, req.englishGloss);
 
+  // Cold email is a long completion (scaffold + local body + gloss), so it gets its
+  // own provider chain with max_tokens=1500. Previously Google-only: one 429 killed
+  // the pitch even when Groq/Cloudflare were configured (fix 2026-11-18).
+  const chain: Array<{ name: string; run: () => Promise<string> }> = [];
+  if (config.llm.google.key) {
+    chain.push({
+      name: `google:${config.llm.google.model}`,
+      run: () => callGoogleNative(config.llm.google.key, config.llm.google.model, system, material, 1500),
+    });
+  }
+  if (config.llm.groq.key) {
+    chain.push({
+      name: `groq:${config.llm.groq.model}`,
+      run: () =>
+        callOpenAiCompat(
+          "https://api.groq.com/openai/v1/chat/completions",
+          config.llm.groq.key,
+          config.llm.groq.model,
+          system,
+          material,
+          {},
+          1500
+        ),
+    });
+  }
+  if (config.llm.cloudflare.accountId && config.llm.cloudflare.apiToken) {
+    chain.push({
+      name: `cloudflare:${config.llm.cloudflare.model}`,
+      run: () =>
+        callOpenAiCompat(
+          `https://api.cloudflare.com/client/v4/accounts/${config.llm.cloudflare.accountId}/ai/v1/chat/completions`,
+          config.llm.cloudflare.apiToken,
+          config.llm.cloudflare.model,
+          system,
+          material,
+          {},
+          1500
+        ),
+    });
+  }
+  if (!chain.length) {
+    addEvent("error", "cold email: no LLM provider configured (SCOUT_LLM_GOOGLE_KEY missing)");
+    return null;
+  }
+
   for (const attempt of [1, 2]) {
-    try {
-      const raw = await callGoogleNative(config.llm.google.key, config.llm.google.model, system, material, 1500);
-      let result: ColdEmailResult | null = null;
-      // 2026-11-15 format: scaffold → OUTREACH DRAFT → ENGLISH TRANSLATION, parsed with
-      // line structure preserved (paragraph breaks are part of the deliverable).
-      const parsed = parseColdEmailOutput(sanitizeEmailDraft(raw));
-      if (parsed && parsed.subject && parsed.localBody) {
-        result = {
-          subject: parsed.subject,
-          body: parsed.gloss ? `${parsed.localBody}\n\n----\n${parsed.gloss}` : parsed.localBody,
-          provider: `google:${config.llm.google.model}`,
-        };
-      } else {
-        // legacy fallback (pre-2026-11-15 shape: "Subject:" line + "----" gloss)
-        const text = sanitizeDraft(raw);
-        const subjectM = text.match(/subject\s*:\s*(.+)/i);
-        const subject = subjectM?.[1]?.trim() ?? "";
-        const splitAt = text.indexOf("----");
-        const bodyPart = (splitAt > 0 ? text.slice(0, splitAt) : text).replace(/^subject\s*:.+\n+/i, "").trim();
-        const englishPart = splitAt > 0 ? text.slice(splitAt + 4).trim() : "";
-        if (subject && bodyPart) {
-          result = {
-            subject,
-            body: englishPart ? `${bodyPart}\n\n----\n${englishPart}` : bodyPart,
-            provider: `google:${config.llm.google.model}`,
-          };
+    for (const p of chain) {
+      try {
+        const raw = await p.run();
+        const result = parseColdEmailResult(raw);
+        if (!result) {
+          addEvent(
+            "error",
+            `cold email ${p.name} attempt ${attempt}: unparseable output (${String(raw).slice(0, 80)}…)`
+          );
+          continue;
         }
+        return { ...result, provider: p.name };
+      } catch (e) {
+        addEvent("error", `cold email ${p.name} attempt ${attempt}: ${String(e).slice(0, 120)}`);
       }
-      if (!result) {
-        addEvent("error", `cold email attempt ${attempt}: unparseable output (${String(raw).slice(0, 80)}…)`);
-        continue;
-      }
-      return result;
-    } catch (e) {
-      addEvent("error", `cold email attempt ${attempt}: ${String(e).slice(0, 120)}`);
     }
   }
   return null;
@@ -332,7 +381,8 @@ async function callOpenAiCompat(
   model: string,
   system: string,
   user: string,
-  extraHeaders: Record<string, string> = {}
+  extraHeaders: Record<string, string> = {},
+  maxTokens = 300
 ): Promise<string> {
   const res = await fetch(url, {
     method: "POST",
@@ -345,7 +395,7 @@ async function callOpenAiCompat(
     body: JSON.stringify({
       model,
       temperature: 0.7,
-      max_tokens: 300,
+      max_tokens: maxTokens,
       messages: [
         { role: "system", content: system },
         { role: "user", content: user },
