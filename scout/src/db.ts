@@ -736,14 +736,20 @@ export function stats(): Record<string, number> {
   }
   const leads = db.prepare("SELECT COUNT(*) AS n FROM entities").get() as { n: number };
   out.leads = leads.n;
+  // "Contacted" is the outreach moment and must survive later funnel states
+  // (sent → responded/bounced), so count the stamped entities, not current state.
   const contacted = db
-    .prepare("SELECT COUNT(*) AS n FROM contacts WHERE state = 'contacted'")
+    .prepare("SELECT COUNT(*) AS n FROM entities WHERE first_contacted_at IS NOT NULL")
     .get() as { n: number };
   out.contacted = contacted.n;
   const replied = db
-    .prepare("SELECT COUNT(*) AS n FROM contacts WHERE state = 'replied'")
+    .prepare("SELECT COUNT(*) AS n FROM contacts WHERE state IN ('responded', 'replied')")
     .get() as { n: number };
   out.replied = replied.n;
+  const draftsSent = db
+    .prepare("SELECT COUNT(*) AS n FROM drafts WHERE channel = 'email' AND status = 'sent'")
+    .get() as { n: number };
+  out.drafts_sent = draftsSent.n;
   return out;
 }
 

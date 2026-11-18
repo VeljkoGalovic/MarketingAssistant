@@ -160,7 +160,7 @@ export function heartbeatText(): string {
   return [
     "📡 <b>Daily heartbeat</b>",
     `candidates: ${s.total} (pending: ${s.pending ?? 0}, notified: ${s.notified ?? 0}, skipped: ${s.skipped ?? 0})`,
-    `leads: ${s.leads ?? 0} · contacted: ${s.contacted ?? 0} · replied: ${s.replied ?? 0}`,
+    `leads: ${s.leads ?? 0} · contacted: ${s.contacted ?? 0} · replied: ${s.replied ?? 0} · drafts: ${s.drafts_sent ?? 0} sent`,
     `lead lane: ${ready} funnel-ready · ${touched}/${config.caps.emailFirstTouchDay} touches today`,
     `extraction canary: ${canaries}`,
     `banned subs: ${[...subs].join(", ") || "none"}`,

@@ -560,7 +560,7 @@ async function handleUpdate(u: TgUpdate): Promise<void> {
       [
         "❤️ <b>Scout health</b>",
         `candidates: ${s.total} (pending: ${s.pending ?? 0}, posted: ${s.posted ?? 0})`,
-        `leads: ${s.leads ?? 0} · contacted: ${s.contacted ?? 0} · replied: ${s.replied ?? 0}`,
+        `leads: ${s.leads ?? 0} · contacted: ${s.contacted ?? 0} · replied: ${s.replied ?? 0} · drafts: ${s.drafts_sent ?? 0} sent`,
         `banned subs: ${[...getBannedSubreddits()].join(", ") || "none"}`,
         `kill switch: ${isKillOn() ? "🔴 ON" : "🟢 off"} · poster: ${posterPaused() ? "⏸ paused" : "▶ active"}`,
       ].join("\n")
